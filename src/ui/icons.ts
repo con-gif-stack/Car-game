@@ -15,6 +15,20 @@ export function drawTabIcon(g: Graphics, id: TabId, cx: number, cy: number, size
   g.fillStyle(color, 1);
 
   switch (id) {
+    case 'farm': {
+      // A little drone: body, four arms and rotors.
+      g.fillCircle(cx, cy, s * 0.24);
+      for (const [dx, dy] of [
+        [-1, -1],
+        [1, -1],
+        [-1, 1],
+        [1, 1],
+      ] as const) {
+        g.lineBetween(cx, cy, cx + dx * s * 0.62, cy + dy * s * 0.62);
+        g.strokeCircle(cx + dx * s * 0.62, cy + dy * s * 0.62, s * 0.26);
+      }
+      break;
+    }
     case 'garage': {
       // Roof and a roll-up garage door.
       g.beginPath();

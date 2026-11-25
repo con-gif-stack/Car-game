@@ -1,12 +1,17 @@
 import { formatPrecise } from '../core/format';
-import { computeIdleRates, computeOfflineEarnings } from '../core/idle';
+import { DEPOSITS, farmRates, scavenge } from '../core/farm';
+import { combineRates, computeOfflineEarnings, trickleRates, type IncomeRates } from '../core/idle';
 import { checkMilestones } from '../core/milestones';
 import { runRewards, simulateRun, useTank } from '../core/run';
 import { createNewState, type Resources } from '../core/state';
 import {
   buyLevelUp,
   buyNextTier,
+  buyDrone,
+  buyDroneModel,
   canAfford,
+  droneBuildCost,
+  droneModelCost,
   levelUpCost,
   nextTierPart,
   salvageMagnetCost,
@@ -17,6 +22,7 @@ import { carProgress, computeCarStats, getActiveCar, getPart, type CarState, typ
 import { BIOMES } from '../data/biomes';
 import { ECONOMY, FUEL_TANKS, type Cost } from '../data/economy';
 import { MATERIAL_IDS, MATERIALS } from '../data/materials';
+import { DRONE_MODELS } from '../data/farm';
 import { QUALITIES, SLOTS, TIER_ORDER } from '../data/vehicles';
 
 /*
@@ -27,6 +33,8 @@ import { QUALITIES, SLOTS, TIER_ORDER } from '../data/vehicles';
 
 export interface PlayerProfile {
   name: string;
+  /** Taps spent scavenging by hand at each check-in. */
+  tapsPerCheckIn?: number;
   /** Times per day the player opens the game, evenly spread. */
   checkInsPerDay: number;
   /** Minutes the game stays open each time. */
@@ -40,7 +48,7 @@ export const PROFILES: readonly PlayerProfile[] = [
 
 export interface Purchase {
   day: number;
-  kind: 'tier' | 'level' | 'magnet';
+  kind: 'tier' | 'level' | 'magnet' | 'drone';
   label: string;
 }
 
@@ -109,7 +117,24 @@ export function simulate(profile: PlayerProfile, maxDays = 180): SimResult {
   const tierMilestones = TIER_ORDER.slice(1).map((quality) => ({ quality, day: null as number | null }));
   const turboMilestone: Milestone = { label: 'First turbo fitted', day: null };
 
-  const rates = () => computeIdleRates(computeCarStats(car), magnetLevel, carProgress(car));
+  const rates = (): IncomeRates => {
+    const farm = farmRates(state.farm);
+    return combineRates(
+      { moneyPerSecond: farm.money, materialsPerSecond: farm.materials },
+      { moneyPerSecond: 0, materialsPerSecond: trickleRates(magnetLevel, carProgress(car)) },
+    );
+  };
+  /** Scavenging by hand: a few taps on the deposits at each check-in (the first unlocks drones). */
+  const tapDeposits = () => {
+    const taps = profile.tapsPerCheckIn ?? 25;
+    for (let i = 0; i < taps; i++) {
+      const deposit = DEPOSITS[i % DEPOSITS.length];
+      const haul = deposit ? scavenge(state.farm, deposit.id) : null;
+      if (!haul) continue;
+      resources.money += haul.money;
+      for (const id of MATERIAL_IDS) resources.materials[id] += haul.materials[id];
+    }
+  };
   const earn = (seconds: number, offline: boolean) => {
     const r = rates();
     if (offline) {
@@ -163,6 +188,25 @@ export function simulate(profile: PlayerProfile, maxDays = 180): SimResult {
         });
       }
     }
+    const farm = state.farm;
+    const buildCost = farm.droneCount >= 1 ? droneBuildCost(farm.droneCount) : null;
+    if (buildCost) {
+      list.push({
+        kind: 'drone',
+        label: `Drone #${farm.droneCount + 1}`,
+        cost: buildCost,
+        buy: () => buyDrone(farm, resources),
+      });
+    }
+    const modelCost = farm.droneCount >= 1 ? droneModelCost(farm.droneModel) : null;
+    if (modelCost) {
+      list.push({
+        kind: 'drone',
+        label: DRONE_MODELS[farm.droneModel + 1]?.name ?? 'Drone model',
+        cost: modelCost,
+        buy: () => buyDroneModel(farm, resources),
+      });
+    }
     const magnetCost = salvageMagnetCost(magnetLevel);
     if (magnetCost) {
       list.push({
@@ -176,8 +220,9 @@ export function simulate(profile: PlayerProfile, maxDays = 180): SimResult {
   };
 
   /**
-   * Strategy: buy any affordable new tier first. Otherwise save for the cheapest tier that only
-   * lacks money, and spend the surplus on levels and the magnet, cheapest first.
+   * Strategy: buy any affordable new tier or drone upgrade first (drones grow income). Otherwise
+   * save for the cheapest tier that only lacks money, and spend the surplus on levels and the
+   * magnet, cheapest first.
    */
   const shop = () => {
     for (;;) {
@@ -185,11 +230,12 @@ export function simulate(profile: PlayerProfile, maxDays = 180): SimResult {
       const byMoney = (a: Option, b: Option) => (a.cost.money ?? 0) - (b.cost.money ?? 0);
       const tiers = all.filter((o) => o.kind === 'tier').sort(byMoney);
       const affordableTier = tiers.find((o) => canAfford(resources, o.cost));
-      let pick = affordableTier;
+      const affordableDrone = all.filter((o) => o.kind === 'drone').sort(byMoney).find((o) => canAfford(resources, o.cost));
+      let pick = affordableTier ?? affordableDrone;
       if (!pick) {
         const goal = tiers.find((o) => canAfford({ ...resources, money: Infinity }, o.cost));
         const surplus = minus(resources, goal?.cost ?? {});
-        pick = all.filter((o) => o.kind !== 'tier' && canAfford(surplus, o.cost)).sort(byMoney)[0];
+        pick = all.filter((o) => (o.kind === 'level' || o.kind === 'magnet') && canAfford(surplus, o.cost)).sort(byMoney)[0];
       }
       if (!pick || !pick.buy()) return;
       purchases.push({ day: t / DAY, kind: pick.kind, label: pick.label });
@@ -211,6 +257,8 @@ export function simulate(profile: PlayerProfile, maxDays = 180): SimResult {
   while (t < maxDays * DAY) {
     // Each check-in: drive runs on whatever fuel has refilled, then shop, then drive again
     // if new parts were bought (players like to test upgrades straight away).
+    tapDeposits();
+    checkMilestones(state);
     driveRuns();
     shop();
     driveRuns();
@@ -286,9 +334,13 @@ export function formatReport(result: SimResult): string {
   for (const purchase of result.purchases.filter((x) => x.kind === 'tier')) {
     lines.push(`  ${fmtDay(purchase.day).padEnd(10)} ${purchase.label}`);
   }
-  const counts = { level: 0, magnet: 0 };
+  const counts = { level: 0, magnet: 0, drone: 0 };
   for (const purchase of result.purchases) if (purchase.kind !== 'tier') counts[purchase.kind] += 1;
-  lines.push(`  (plus ${counts.level} part levels and ${counts.magnet} Salvage Magnet levels)`);
+  lines.push(`  (plus ${counts.level} part levels, ${counts.magnet} Salvage Magnet levels and ${counts.drone} drone upgrades)`);
+  lines.push('Drone upgrades:');
+  for (const purchase of result.purchases.filter((x) => x.kind === 'drone')) {
+    lines.push(`  ${fmtDay(purchase.day).padEnd(10)} ${purchase.label}`);
+  }
   lines.push('');
   lines.push(
     `Longest wait between part tiers: ${result.longestTierWait.days.toFixed(2)} days (ending with ${result.longestTierWait.endedWith})`,

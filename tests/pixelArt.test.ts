@@ -9,6 +9,7 @@ import {
   RUSTBUCKET_LAYOUT,
   RUSTBUCKET_PALETTE,
 } from '../src/art/carArt';
+import { buildDeposit, buildDrone, buildFarmGround, buildGarage, buildWreck, depositStage } from '../src/art/farmArt';
 import { emptyResources } from '../src/core/state';
 import { buyNextTier } from '../src/core/upgrades';
 import { createStarterGarage, getActiveCar } from '../src/core/vehicle';
@@ -120,5 +121,34 @@ describe('car looks follow the installed parts', () => {
     });
     expect(open).toBeGreaterThan(0);
     expect(buildBrake(2).toRgba()).not.toEqual(buildBrake(4).toRgba());
+  });
+});
+
+describe('farm art', () => {
+  it('each drone model looks different, and its two animation frames differ', () => {
+    const looks = [0, 1, 2, 3].map((model) => buildDrone(model, 0).toRgba().join(','));
+    expect(new Set(looks).size).toBe(4);
+    for (const model of [0, 1, 2, 3]) {
+      expect(buildDrone(model, 0).toRgba()).not.toEqual(buildDrone(model, 1).toRgba());
+    }
+  });
+
+  it('deposits shrink as they are emptied', () => {
+    expect(depositStage(60, 60)).toBe(3);
+    expect(depositStage(30, 60)).toBe(2);
+    expect(depositStage(5, 60)).toBe(1);
+    expect(depositStage(0, 60)).toBe(0);
+    const filled = (stage: number) => {
+      let n = 0;
+      buildDeposit('scrapHeap', stage, 1).forEach((_x, _y, c) => c !== null && n++);
+      return n;
+    };
+    expect(filled(3)).toBeGreaterThan(filled(1));
+  });
+
+  it('builds the ground, garage and wrecks deterministically', () => {
+    expect(buildFarmGround(60, 40, 5).toRgba()).toEqual(buildFarmGround(60, 40, 5).toRgba());
+    expect(buildGarage().width).toBeGreaterThan(0);
+    expect(buildWreck(1).toRgba()).toEqual(buildWreck(1).toRgba());
   });
 });

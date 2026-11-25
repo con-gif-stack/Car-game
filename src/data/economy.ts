@@ -1,4 +1,4 @@
-import type { QualityId, SlotId, StatId } from '../core/vehicle';
+import type { QualityId, SlotId } from '../core/vehicle';
 import type { MaterialId } from './materials';
 
 /*
@@ -20,26 +20,7 @@ export interface CostCurve {
   growth: number;
 }
 
-/** A resource earned per km, scaled by how a car stat compares with the starter car's. */
-export interface StatScaling {
-  stat: StatId;
-  /** Stat value that gives ×1 (the starter car's value). */
-  reference: number;
-}
-
 export const ECONOMY = {
-  idleDriving: {
-    /** Idle cruising speed with zero power (km/h). */
-    baseSpeedKmh: 20,
-    /** Extra idle speed per point of Power (km/h). */
-    speedKmhPerPower: 0.35,
-    /** Money per km for the starter car (~1 per second at ~40 km/h). */
-    moneyPerKm: 90,
-    /** Better fuel efficiency = more money per km. */
-    moneyScaling: { stat: 'efficiency', reference: 20 } as StatScaling,
-    /** Better grip reaches more roadside scrap = more distance-based materials per km. */
-    materialsScaling: { stat: 'grip', reference: 16 } as StatScaling,
-  },
   /**
    * The Salvage Magnet boosts the idle trickle of Rare-and-above materials
    * (runs are their main source, from Step 5).

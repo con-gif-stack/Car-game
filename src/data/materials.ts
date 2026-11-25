@@ -34,16 +34,16 @@ export type MaterialId =
 export type MaterialIcon = 'scrap' | 'ring' | 'coil' | 'ingot' | 'plate' | 'weave' | 'disc';
 
 /**
- * How a material drops while idle-driving.
- * - distance: `perKm`, scaled by the car's Grip (more roadside scrap within reach).
- * - trickle: `perHour`, boosted by the Salvage Magnet. Used for Rare and above, which come
- *   mainly from driving runs.
- * Drops start at `unlockProgress` and grow by `growthPerProgress` for each progress level
- * beyond it, so rarer materials become more common as the game goes on.
+ * A small idle trickle (Rare and above): `perHour`, boosted by the Salvage Magnet. These come
+ * mainly from drive runs. Drops start at `unlockProgress` and grow by `growthPerProgress` for
+ * each progress level beyond it, so rarer materials become more common as the game goes on.
+ * Common and Uncommon materials come from the farm (deposits and drones) and run finds instead.
  */
-export type IdleSource =
-  | { kind: 'distance'; perKm: number; unlockProgress: number; growthPerProgress: number }
-  | { kind: 'trickle'; perHour: number; unlockProgress: number; growthPerProgress: number };
+export interface TrickleSource {
+  perHour: number;
+  unlockProgress: number;
+  growthPerProgress: number;
+}
 
 export interface MaterialDef {
   id: MaterialId;
@@ -51,7 +51,8 @@ export interface MaterialDef {
   rarity: RarityId;
   description: string;
   icon: MaterialIcon;
-  idle: IdleSource;
+  /** Idle trickle, for Rare and above; null for materials farmed from deposits. */
+  trickle: TrickleSource | null;
 }
 
 /** All materials, in display order (commonest first). */
@@ -62,7 +63,7 @@ export const MATERIALS: readonly MaterialDef[] = [
     rarity: 'common',
     description: 'Steel offcuts and bent brackets. The backbone of every build.',
     icon: 'scrap',
-    idle: { kind: 'distance', perKm: 0.4, unlockProgress: 0, growthPerProgress: 0.3 },
+    trickle: null,
   },
   {
     id: 'rubber',
@@ -70,7 +71,7 @@ export const MATERIALS: readonly MaterialDef[] = [
     rarity: 'common',
     description: 'Old tyres and hoses, ready to be reworked.',
     icon: 'ring',
-    idle: { kind: 'distance', perKm: 0.2, unlockProgress: 0, growthPerProgress: 0.3 },
+    trickle: null,
   },
   {
     id: 'copperWire',
@@ -78,7 +79,7 @@ export const MATERIALS: readonly MaterialDef[] = [
     rarity: 'uncommon',
     description: 'Stripped from dead wiring looms. Engines and pumps need it.',
     icon: 'coil',
-    idle: { kind: 'distance', perKm: 0.08, unlockProgress: 0, growthPerProgress: 0.45 },
+    trickle: null,
   },
   {
     id: 'aluminum',
@@ -86,7 +87,7 @@ export const MATERIALS: readonly MaterialDef[] = [
     rarity: 'uncommon',
     description: 'Light and strong. Cast into engine blocks and housings.',
     icon: 'ingot',
-    idle: { kind: 'distance', perKm: 0.06, unlockProgress: 0, growthPerProgress: 0.45 },
+    trickle: null,
   },
   {
     id: 'titanium',
@@ -94,7 +95,7 @@ export const MATERIALS: readonly MaterialDef[] = [
     rarity: 'rare',
     description: 'Heat-proof and tough. Turbos, springs and exhausts love it.',
     icon: 'plate',
-    idle: { kind: 'trickle', perHour: 0.06, unlockProgress: 0, growthPerProgress: 0.8 },
+    trickle: { perHour: 0.06, unlockProgress: 0, growthPerProgress: 0.8 },
   },
   {
     id: 'carbonFiber',
@@ -102,7 +103,7 @@ export const MATERIALS: readonly MaterialDef[] = [
     rarity: 'rare',
     description: 'Woven strength at almost no weight.',
     icon: 'weave',
-    idle: { kind: 'trickle', perHour: 0.04, unlockProgress: 0, growthPerProgress: 0.8 },
+    trickle: { perHour: 0.04, unlockProgress: 0, growthPerProgress: 0.8 },
   },
   {
     id: 'ceramic',
@@ -110,7 +111,7 @@ export const MATERIALS: readonly MaterialDef[] = [
     rarity: 'epic',
     description: 'Shrugs off temperatures that melt steel. For race brakes and turbos.',
     icon: 'disc',
-    idle: { kind: 'trickle', perHour: 0.03, unlockProgress: 3, growthPerProgress: 1 },
+    trickle: { perHour: 0.03, unlockProgress: 3, growthPerProgress: 1 },
   },
 ];
 

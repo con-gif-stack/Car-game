@@ -3,10 +3,21 @@ import { formatNumber, formatPrecise } from '../core/format';
 import type { GameModel } from '../core/GameModel';
 import { salvageMagnetMultiplier } from '../core/idle';
 import type { Resources } from '../core/state';
-import { canAfford, costMaterials, levelUpCost, nextTierPart, salvageMagnetCost, tierCost } from '../core/upgrades';
+import { DEPOSITS, farmRates } from '../core/farm';
+import {
+  canAfford,
+  costMaterials,
+  droneBuildCost,
+  droneModelCost,
+  levelUpCost,
+  nextTierPart,
+  salvageMagnetCost,
+  tierCost,
+} from '../core/upgrades';
 import { getInstalledPart, partStatsAtLevel, type SlotDef, type StatBlock } from '../core/vehicle';
 import { ECONOMY, PART_LEVELS, type Cost } from '../data/economy';
-import { MATERIALS, MATERIALS_BY_ID, RARITIES } from '../data/materials';
+import { DRONE_MODELS, DRONES } from '../data/farm';
+import { MATERIAL_IDS, MATERIALS, MATERIALS_BY_ID, RARITIES } from '../data/materials';
 import { QUALITIES, STATS } from '../data/vehicles';
 import { COLORS, TEXT_COLORS } from '../ui/theme';
 import { cssColor, Panel, type Area } from './panel';
@@ -35,7 +46,7 @@ function statChanges(from: Partial<StatBlock>, to: Partial<StatBlock>): string {
 }
 
 /** One row per resource in a cost: icon, name, and "owned / needed" in green or red. */
-function costRows(panel: Panel, scene: Phaser.Scene, resources: Resources, cost: Cost): void {
+export function costRows(panel: Panel, scene: Phaser.Scene, resources: Resources, cost: Cost): void {
   const row = (icon: string, name: string, nameColor: string, owned: number, needed: number) =>
     panel.row({
       icon,
@@ -61,7 +72,8 @@ function costRows(panel: Panel, scene: Phaser.Scene, resources: Resources, cost:
 export function panelSignature(model: GameModel): string {
   const { resources, workshop } = model.state;
   const owned = MATERIALS.map((m) => formatNumber(resources.materials[m.id])).join(',');
-  return `${formatNumber(resources.money)}|${owned}|${JSON.stringify(model.activeCar.parts)}|${workshop.salvageMagnetLevel}`;
+  const { farm } = model.state;
+  return `${formatNumber(resources.money)}|${owned}|${JSON.stringify(model.activeCar.parts)}|${workshop.salvageMagnetLevel}|${farm.droneCount}|${farm.droneModel}`;
 }
 
 /** Details of the part in a slot, with buttons to level it up or install the next tier. */
@@ -186,20 +198,22 @@ export function openInventoryPanel(
   onClose: () => void,
 ): Phaser.GameObjects.Container {
   const { materials } = model.state.resources;
-  const rates = model.idleRates().materialsPerSecond;
+  const rates = model.incomeRates().materialsPerSecond;
+  const farmed = new Set(DEPOSITS.map((d) => d.material));
   const panel = new Panel(scene, { area, onBackdrop: onClose });
 
   panel.text('MATERIALS', 26, TEXT_COLORS.accent, { bold: true, gapAfter: 8 });
-  panel.text('What your car has salvaged so far.', 28, TEXT_COLORS.secondary, { gapAfter: 20 });
+  panel.text('Everything your drones, runs and scavenging have brought in.', 28, TEXT_COLORS.secondary, { gapAfter: 20 });
   for (const material of MATERIALS) {
     const rarity = RARITIES[material.rarity];
     const perHour = rates[material.id] * 3600;
-    const source =
-      material.idle.kind === 'distance'
-        ? `${rarity.label} · +${formatPrecise(perHour)}/h while driving`
-        : perHour > 0
-          ? `${rarity.label} · mostly from driving runs (+${formatPrecise(perHour)}/h idle)`
-          : `${rarity.label} · from driving runs`;
+    const source = farmed.has(material.id)
+      ? perHour > 0
+        ? `${rarity.label} · +${formatPrecise(perHour)}/h from drones`
+        : `${rarity.label} · scavenge it on the farm`
+      : perHour > 0
+        ? `${rarity.label} · mostly from drive runs (+${formatPrecise(perHour)}/h trickle)`
+        : `${rarity.label} · from drive runs`;
     panel.row({
       icon: materialIconKey(scene, material.id),
       title: material.name,
@@ -209,6 +223,69 @@ export function openInventoryPanel(
       gapAfter: 16,
     });
   }
+  panel.gap(4);
+  panel.button('Close', { onClick: onClose, color: COLORS.panelBorder, height: 80 });
+  return panel.finish();
+}
+
+/** Drone Bay: build more drones and upgrade them to better models. */
+export function openDroneBayPanel(
+  scene: Phaser.Scene,
+  model: GameModel,
+  area: Area,
+  onClose: () => void,
+): Phaser.GameObjects.Container {
+  const resources = model.state.resources;
+  const farm = model.state.farm;
+  const current = DRONE_MODELS[farm.droneModel] ?? DRONE_MODELS[0];
+  const rates = farmRates(farm);
+  const perHour = MATERIAL_IDS.reduce((sum, id) => sum + rates.materials[id], 0) * 3600;
+  const panel = new Panel(scene, { area, onBackdrop: onClose });
+
+  panel.text('DRONE BAY', 26, TEXT_COLORS.accent, { bold: true, gapAfter: 8 });
+  panel.text(`${farm.droneCount} × ${current?.name ?? ''}`, 48, TEXT_COLORS.primary, { bold: true, gapAfter: 6 });
+  panel.text(current?.description ?? '', 28, TEXT_COLORS.secondary, { gapAfter: 8 });
+  panel.text(
+    `Together: +${formatPrecise(perHour)} materials/h · +${formatPrecise(rates.money * 3600)} money/h`,
+    28,
+    GREEN,
+    { gapAfter: 20 },
+  );
+
+  panel.divider();
+  const buildCost = droneBuildCost(farm.droneCount);
+  if (buildCost) {
+    panel.text(`BUILD DRONE #${farm.droneCount + 1}`, 24, TEXT_COLORS.muted, { bold: true, gapAfter: 10 });
+    costRows(panel, scene, resources, buildCost);
+    panel.gap(6);
+    panel.button('Build drone', {
+      enabled: canAfford(resources, buildCost),
+      onClick: () => model.buyDrone(),
+      color: COLORS.accentAlt,
+    });
+  } else {
+    panel.text(`The garage can run ${DRONES.maxCount} drones. Garage upgrades will add room.`, 28, TEXT_COLORS.muted, { gapAfter: 16 });
+  }
+
+  panel.divider();
+  const next = DRONE_MODELS[farm.droneModel + 1];
+  const modelCost = droneModelCost(farm.droneModel);
+  if (next && modelCost) {
+    panel.text(`UPGRADE → ${next.name.toUpperCase()}`, 24, TEXT_COLORS.muted, { bold: true, gapAfter: 6 });
+    panel.text(next.description, 28, TEXT_COLORS.secondary, { gapAfter: 6 });
+    panel.text(
+      `Speed ×${fmtStat(next.speed / (current?.speed ?? 1))} · carries ${next.capacity} · digs ×${fmtStat(next.heapYield)}`,
+      28,
+      GREEN,
+      { gapAfter: 12 },
+    );
+    costRows(panel, scene, resources, modelCost);
+    panel.gap(6);
+    panel.button(`Upgrade all drones`, { enabled: canAfford(resources, modelCost), onClick: () => model.buyDroneModel() });
+  } else {
+    panel.text('Your drones are the best there are, for now.', 28, TEXT_COLORS.muted, { gapAfter: 16 });
+  }
+
   panel.gap(4);
   panel.button('Close', { onClick: onClose, color: COLORS.panelBorder, height: 80 });
   return panel.finish();

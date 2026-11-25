@@ -1,6 +1,7 @@
 import type { BiomeId } from '../data/biomes';
 import { FUEL_TANKS } from '../data/economy';
 import { emptyMaterials, type MaterialId } from '../data/materials';
+import { createFarmState, type FarmState } from './farm';
 import type { FuelState } from './run';
 import { createStarterGarage, type GarageState } from './vehicle';
 
@@ -8,7 +9,7 @@ import { createStarterGarage, type GarageState } from './vehicle';
  * The save-file version. Bump it whenever the shape of GameState changes in a way that
  * needs converting old saves, and add a migration in save.ts.
  */
-export const SAVE_VERSION = 4;
+export const SAVE_VERSION = 5;
 
 export type MaterialStock = Record<MaterialId, number>;
 
@@ -22,7 +23,7 @@ export interface Resources {
 export interface GameStats {
   /** Total seconds the game has been open and running. */
   playTimeSeconds: number;
-  /** Total distance idle-driven, including while away (km). */
+  /** Total distance driven on runs (km). */
   distanceKm: number;
   /** How many times the game has been started. */
   sessions: number;
@@ -42,6 +43,8 @@ export interface GameState {
   pendingOffline: PendingOffline;
   /** Garage-wide upgrades that aren't car parts. */
   workshop: WorkshopState;
+  /** The farm: deposits, drones and hand scavenging. */
+  farm: FarmState;
   /** Drive runs: records and fuel. */
   run: RunRecord;
   /** Ids of milestones reached (see src/data/milestones.ts). */
@@ -65,11 +68,10 @@ export interface WorkshopState {
   salvageMagnetLevel: number;
 }
 
-/** Earnings (money, materials, distance) over some period. */
+/** Earnings (money and materials) over some period. */
 export interface Earnings {
   money: number;
   materials: MaterialStock;
-  distanceKm: number;
 }
 
 export interface PendingOffline extends Earnings {
@@ -92,6 +94,7 @@ export function createNewState(now: number): GameState {
     garage: createStarterGarage(),
     pendingOffline: emptyPendingOffline(),
     workshop: { salvageMagnetLevel: 0 },
+    farm: createFarmState(),
     run: { bestDistanceKm: 0, runsCompleted: 0, fuel: { tanks: FUEL_TANKS.max, lastRefillAt: now } },
     milestones: [],
     unlockedBiomes: ['junkyard'],
@@ -105,5 +108,5 @@ export function createNewState(now: number): GameState {
 }
 
 export function emptyPendingOffline(): PendingOffline {
-  return { money: 0, materials: emptyMaterials(), distanceKm: 0, seconds: 0, capped: false };
+  return { money: 0, materials: emptyMaterials(), seconds: 0, capped: false };
 }

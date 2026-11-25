@@ -17,6 +17,8 @@ export function milestoneProgress(state: GameState, condition: MilestoneConditio
       return { current: state.run.bestDistanceKm, target: condition.km };
     case 'runs':
       return { current: state.run.runsCompleted, target: condition.count };
+    case 'scavenged':
+      return { current: state.farm.scavenged, target: condition.count };
     case 'allPartsTier': {
       const car = getActiveCar(state.garage);
       const needed = QUALITIES[condition.tier].rank;
@@ -52,6 +54,8 @@ export function checkMilestones(state: GameState): MilestoneDef[] {
     }
     if (reward.unlockFeature && !state.unlockedFeatures.includes(reward.unlockFeature)) {
       state.unlockedFeatures.push(reward.unlockFeature);
+      // The drones feature comes with the first drone.
+      if (reward.unlockFeature === 'drones') state.farm.droneCount = Math.max(1, state.farm.droneCount);
     }
     granted.push(milestone);
   }

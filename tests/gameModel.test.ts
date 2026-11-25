@@ -13,7 +13,9 @@ function setup() {
   let now = T0;
   const clock = () => now;
   const saves = new SaveManager(storage, clock);
-  const model = new GameModel(createNewState(T0), saves, clock);
+  const state = createNewState(T0);
+  state.farm.droneCount = 1; // most tests want some idle income
+  const model = new GameModel(state, saves, clock);
   return {
     storage,
     saves,
@@ -82,14 +84,12 @@ describe('GameModel', () => {
     expect(resumed).toBe(false);
   });
 
-  it('earns money and distance while ticking', () => {
+  it('earns from drone hauls and the rare trickle while ticking', () => {
     const { model } = setup();
-    const rates = model.idleRates();
-    play(model, 5);
-    expect(model.state.resources.money).toBeCloseTo(rates.moneyPerSecond * 5);
-    expect(model.state.resources.materials.scrapMetal).toBeCloseTo(rates.materialsPerSecond.scrapMetal * 5);
-    expect(model.state.resources.materials.titanium).toBeCloseTo(rates.materialsPerSecond.titanium * 5);
-    expect(model.state.stats.distanceKm).toBeCloseTo(rates.kmPerSecond * 5);
+    const rates = model.incomeRates();
+    play(model, 120);
+    expect(model.state.resources.money).toBeGreaterThan(0);
+    expect(model.state.resources.materials.titanium).toBeCloseTo(rates.materialsPerSecond.titanium * 120);
   });
 
   it('adds short absences straight away, without a summary', () => {
@@ -112,14 +112,14 @@ describe('GameModel', () => {
     advanceWallClock(3600);
     model.resume();
 
-    const expected = model.idleRates().moneyPerSecond * 3600 * ECONOMY.offline.efficiency;
+    const expected = model.incomeRates().moneyPerSecond * 3600 * ECONOMY.offline.efficiency;
     expect(model.state.resources.money).toBe(0);
     expect(model.state.pendingOffline.money).toBeCloseTo(expected);
     expect(summaries).toHaveLength(1);
     // Pending earnings are saved, so closing the game before collecting loses nothing.
     expect(saves.load().state.pendingOffline.money).toBeCloseTo(expected);
 
-    const expectedScrap = model.idleRates().materialsPerSecond.scrapMetal * 3600 * ECONOMY.offline.efficiency;
+    const expectedScrap = model.incomeRates().materialsPerSecond.scrapMetal * 3600 * ECONOMY.offline.efficiency;
     expect(model.state.pendingOffline.materials.scrapMetal).toBeCloseTo(expectedScrap);
     expect(model.collectOffline()).toBeCloseTo(expected);
     expect(model.state.resources.money).toBeCloseTo(expected);
@@ -173,11 +173,11 @@ describe('GameModel', () => {
 
   it('upgrading parts raises progress, so rare materials drop faster', () => {
     const { model } = setup();
-    const before = model.idleRates().materialsPerSecond.titanium;
+    const before = model.incomeRates().materialsPerSecond.titanium;
     model.state.resources.money = 1e9;
     for (const id of MATERIAL_IDS) model.state.resources.materials[id] = 1e6;
     for (const slot of ['engine', 'tires', 'brakes', 'exhaust'] as const) model.buyNextTier(slot);
-    expect(model.idleRates().materialsPerSecond.titanium).toBeGreaterThan(before);
+    expect(model.incomeRates().materialsPerSecond.titanium).toBeGreaterThan(before);
   });
 
   it('stops saving after the save is wiped', () => {

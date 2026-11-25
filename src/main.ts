@@ -3,6 +3,7 @@ import { GameModel } from './core/GameModel';
 import { MemoryStorage, SaveManager, type KeyValueStorage } from './core/save';
 import type { AppContext } from './scenes/context';
 import { DriveScene } from './scenes/DriveScene';
+import { FarmScene } from './scenes/FarmScene';
 import { GarageScene } from './scenes/GarageScene';
 import { PlaceholderTabScene } from './scenes/PlaceholderTabScene';
 import { UIScene } from './scenes/UIScene';
@@ -24,6 +25,7 @@ function getStorage(): KeyValueStorage {
 
 /** Tabs that have a real screen; the rest show a placeholder. */
 const TAB_SCENES: Partial<Record<TabId, (ctx: AppContext) => Phaser.Scene>> = {
+  farm: (ctx) => new FarmScene(ctx),
   garage: (ctx) => new GarageScene(ctx),
   drive: (ctx) => new DriveScene(ctx),
   world: (ctx) => new WorldScene(ctx),

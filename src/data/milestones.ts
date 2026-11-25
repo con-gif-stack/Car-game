@@ -10,7 +10,8 @@ import type { MaterialAmounts } from './economy';
 export type MilestoneCondition =
   | { kind: 'distance'; km: number }
   | { kind: 'runs'; count: number }
-  | { kind: 'allPartsTier'; tier: QualityId };
+  | { kind: 'allPartsTier'; tier: QualityId }
+  | { kind: 'scavenged'; count: number };
 
 export interface MilestoneReward {
   /** A biome that becomes available to farm (from Step 8). */
@@ -31,6 +32,13 @@ export interface MilestoneDef {
 
 /** In the order the player will usually reach them. */
 export const MILESTONES: readonly MilestoneDef[] = [
+  {
+    id: 'first-drone',
+    title: 'Scrap Collector',
+    description: 'Scavenge 20 times by hand. Enough junk to build your first drone.',
+    condition: { kind: 'scavenged', count: 20 },
+    reward: { unlockFeature: 'drones' },
+  },
   {
     id: 'first-run',
     title: 'Hitting the Road',

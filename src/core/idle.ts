@@ -1,12 +1,15 @@
-import { ECONOMY, type StatScaling } from '../data/economy';
-import { emptyMaterials, MATERIALS, type IdleSource } from '../data/materials';
+import { ECONOMY } from '../data/economy';
+import { emptyMaterials, MATERIAL_IDS, MATERIALS, type TrickleSource } from '../data/materials';
 import type { MaterialStock } from './state';
-import type { StatBlock } from './vehicle';
 
-/** What the car earns per second while idle-driving. */
-export interface IdleRates {
-  speedKmh: number;
-  kmPerSecond: number;
+/*
+ * Idle income: what keeps arriving while the game runs or is away. Since the core loop
+ * revision, that is the farm's drone hauls (src/core/farm.ts) plus a small trickle of Rare
+ * and Epic materials (the Salvage Magnet).
+ */
+
+/** Income per second. */
+export interface IncomeRates {
   moneyPerSecond: number;
   materialsPerSecond: MaterialStock;
 }
@@ -14,19 +17,14 @@ export interface IdleRates {
 export interface OfflineEarnings {
   /** Seconds that counted toward earnings (time away, capped). */
   seconds: number;
-  distanceKm: number;
   money: number;
   materials: MaterialStock;
   /** True if the player was away longer than the cap. */
   capped: boolean;
 }
 
-function statFactor(stats: StatBlock, scaling: StatScaling): number {
-  return Math.max(0, stats[scaling.stat]) / scaling.reference;
-}
-
-/** How much a material's idle drop is multiplied at a progress level (0 before it unlocks). */
-export function progressFactor(source: IdleSource, progress: number): number {
+/** How much a trickle is multiplied at a progress level (0 before it unlocks). */
+export function progressFactor(source: TrickleSource, progress: number): number {
   if (progress < source.unlockProgress) return 0;
   return 1 + source.growthPerProgress * (progress - source.unlockProgress);
 }
@@ -38,48 +36,34 @@ export function salvageMagnetMultiplier(level: number): number {
 }
 
 /**
- * Idle earnings per second.
- * @param progress car progress (see carProgress); rarer materials drop more as it rises.
+ * The idle trickle of Rare-and-above materials, per second.
+ * @param progress car progress (see carProgress); the trickle grows as it rises.
  */
-export function computeIdleRates(stats: StatBlock, salvageMagnetLevel = 0, progress = 0): IdleRates {
-  const d = ECONOMY.idleDriving;
-  const speedKmh = Math.max(0, d.baseSpeedKmh + stats.power * d.speedKmhPerPower);
-  const kmPerSecond = speedKmh / 3600;
-  const grip = statFactor(stats, d.materialsScaling);
+export function trickleRates(salvageMagnetLevel: number, progress: number): MaterialStock {
+  const rates = emptyMaterials();
   const magnet = salvageMagnetMultiplier(salvageMagnetLevel);
-
-  const materialsPerSecond = emptyMaterials();
   for (const material of MATERIALS) {
-    const source = material.idle;
-    const growth = progressFactor(source, progress);
-    materialsPerSecond[material.id] =
-      source.kind === 'distance'
-        ? kmPerSecond * source.perKm * grip * growth
-        : (source.perHour / 3600) * magnet * growth;
+    if (!material.trickle) continue;
+    rates[material.id] = (material.trickle.perHour / 3600) * magnet * progressFactor(material.trickle, progress);
   }
+  return rates;
+}
 
-  return {
-    speedKmh,
-    kmPerSecond,
-    moneyPerSecond: kmPerSecond * d.moneyPerKm * statFactor(stats, d.moneyScaling),
-    materialsPerSecond,
-  };
+/** Adds two sets of rates together. */
+export function combineRates(a: IncomeRates, b: IncomeRates): IncomeRates {
+  const materialsPerSecond = emptyMaterials();
+  for (const id of MATERIAL_IDS) materialsPerSecond[id] = a.materialsPerSecond[id] + b.materialsPerSecond[id];
+  return { moneyPerSecond: a.moneyPerSecond + b.moneyPerSecond, materialsPerSecond };
 }
 
 /** Earnings for time spent away, limited by the offline cap. */
-export function computeOfflineEarnings(rates: IdleRates, awaySeconds: number): OfflineEarnings {
+export function computeOfflineEarnings(rates: IncomeRates, awaySeconds: number): OfflineEarnings {
   const { capHours, efficiency } = ECONOMY.offline;
   const capSeconds = capHours * 3600;
   const away = Number.isFinite(awaySeconds) ? Math.max(0, awaySeconds) : 0;
   const seconds = Math.min(away, capSeconds);
   const earn = (perSecond: number) => perSecond * seconds * efficiency;
   const materials = emptyMaterials();
-  for (const material of MATERIALS) materials[material.id] = earn(rates.materialsPerSecond[material.id]);
-  return {
-    seconds,
-    distanceKm: earn(rates.kmPerSecond),
-    money: earn(rates.moneyPerSecond),
-    materials,
-    capped: away > capSeconds,
-  };
+  for (const id of MATERIAL_IDS) materials[id] = earn(rates.materialsPerSecond[id]);
+  return { seconds, money: earn(rates.moneyPerSecond), materials, capped: away > capSeconds };
 }

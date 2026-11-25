@@ -13,7 +13,7 @@ import {
   type FuelState,
 } from '../src/core/run';
 import { MemoryStorage, parseSave, SaveManager } from '../src/core/save';
-import { createNewState, emptyResources } from '../src/core/state';
+import { createNewState, emptyResources, SAVE_VERSION } from '../src/core/state';
 import { buyLevelUp, buyNextTier } from '../src/core/upgrades';
 import { computeCarStats, createCar, type StatBlock } from '../src/core/vehicle';
 import { biomeAt, BIOMES } from '../src/data/biomes';
@@ -216,14 +216,14 @@ describe('runs in the game model', () => {
   });
 });
 
-describe('save migration v3 → v4', () => {
+describe('save migration v3 → current', () => {
   it('adds run records, milestones and biomes with defaults, and drops unknown ids', () => {
     const v3 = { ...createNewState(T0), version: 3 } as Record<string, unknown>;
     delete v3.run;
     delete v3.unlockedBiomes;
     v3.milestones = ['first-run', 'not-a-milestone', 'first-run'];
     const state = parseSave(JSON.stringify(v3), T0);
-    expect(state?.version).toBe(4);
+    expect(state?.version).toBe(SAVE_VERSION);
     expect(state?.run.fuel.tanks).toBe(FUEL_TANKS.max);
     expect(state?.run.bestDistanceKm).toBe(0);
     expect(state?.unlockedBiomes).toEqual(['junkyard']);

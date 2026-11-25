@@ -1,4 +1,4 @@
-export type TabId = 'garage' | 'drive' | 'upgrades' | 'world';
+export type TabId = 'farm' | 'garage' | 'drive' | 'upgrades' | 'world';
 
 export interface TabDef {
   id: TabId;
@@ -11,11 +11,14 @@ export interface TabDef {
   plannedStep?: string;
 }
 
-/**
- * The main tabs, in tab-bar order. The Farm tab joins as the first tab in Step 6
- * (design doc Part 3: Farm | Garage | Drive | Upgrades | World).
- */
+/** The main tabs, in tab-bar order (design doc Part 3). The Farm is home. */
 export const TABS: readonly TabDef[] = [
+  {
+    id: 'farm',
+    label: 'Farm',
+    sceneKey: 'FarmTab',
+    description: 'Scavenge the yard and send out your drones.',
+  },
   {
     id: 'garage',
     label: 'Garage',

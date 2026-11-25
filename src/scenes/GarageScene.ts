@@ -1,10 +1,9 @@
 import Phaser from 'phaser';
-import { formatDistance, formatPrecise } from '../core/format';
+import { formatDistance } from '../core/format';
 import type { PurchaseKind } from '../core/GameModel';
 import { canAfford, levelUpCost, nextTierPart, tierCost } from '../core/upgrades';
 import { computeCarStats, getInstalledPart, type SlotDef, type SlotId } from '../core/vehicle';
 import { PART_LEVELS } from '../data/economy';
-import { MATERIAL_IDS, MATERIALS, RARITIES, type MaterialId } from '../data/materials';
 import { CAR_MODELS, QUALITIES, SLOTS, STATS } from '../data/vehicles';
 import { COLORS, TEXT_COLORS } from '../ui/theme';
 import type { AppContext } from './context';
@@ -24,10 +23,6 @@ const CARD_HEIGHT = 150;
 const CARD_GAP = 16;
 const PARTS_HEADER = 56;
 const PARTS_SECTION_HEIGHT = PARTS_HEADER + 2 * CARD_HEIGHT + CARD_GAP;
-/** Seconds between "+money" pop-ups over the car. */
-const MONEY_POPUP_INTERVAL = 1;
-/** Seconds between material pop-ups, so several at once don't pile up. */
-const MATERIAL_POPUP_INTERVAL = 0.4;
 /** Seconds between checks for whether an open panel needs redrawing. */
 const PANEL_REFRESH_INTERVAL = 0.25;
 
@@ -52,7 +47,7 @@ const text = textStyle;
 const overlayText = overlayStyle;
 
 /**
- * Garage tab: the active car idle-driving at the top, then its stats and the part in each slot.
+ * Garage tab: the active car in the showroom at the top, then its stats and the part in each slot.
  * Tapping a part opens its panel, where it can be levelled up or replaced with the next tier.
  */
 export class GarageScene extends Phaser.Scene {
@@ -61,21 +56,13 @@ export class GarageScene extends Phaser.Scene {
   private drive!: DriveView;
   private carName!: Phaser.GameObjects.Text;
   private carDescription!: Phaser.GameObjects.Text;
-  private rateText!: Phaser.GameObjects.Text;
-  private tripText!: Phaser.GameObjects.Text;
-  private materialsRateText!: Phaser.GameObjects.Text;
-  private rareRateText!: Phaser.GameObjects.Text;
+  private bestRunText!: Phaser.GameObjects.Text;
 
   private panel: Phaser.GameObjects.Container | null = null;
   private openPanel: OpenPanel | null = null;
   private panelSignature = '';
   private panelTimer = 0;
 
-  /** Whole units of each material last seen, to pop up "+1 Rubber" when another arrives. */
-  private lastWhole = {} as Record<MaterialId, number>;
-  private readonly popupQueue: { label: string; color: number }[] = [];
-  private moneyPopupTimer = 0;
-  private materialPopupTimer = 0;
 
   constructor(private readonly ctx: AppContext) {
     super({ key: 'GarageTab' });
@@ -95,49 +82,23 @@ export class GarageScene extends Phaser.Scene {
     this.createStatsPanel(width, statsY);
     this.createPartsGrid(width, partsY);
     this.refresh();
-    this.rememberMaterials();
 
     const unsubscribe = this.ctx.model.events.on('purchased', (kind, slot) => this.onPurchased(kind, slot));
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, unsubscribe);
-    this.events.on(Phaser.Scenes.Events.WAKE, () => {
-      this.refresh();
-      this.rememberMaterials();
-    });
+    this.events.on(Phaser.Scenes.Events.WAKE, () => this.refresh());
     this.input.keyboard?.on('keydown-ESC', () => this.closePanel());
   }
 
   update(_time: number, deltaMs: number): void {
     const dt = deltaMs / 1000;
     const { model } = this.ctx;
-    const rates = model.idleRates();
-    this.drive.update(dt, rates.speedKmh);
-
-    // Overlay rates: money per second, common/uncommon materials per hour, rare finds per hour.
-    let common = 0;
-    let rare = 0;
-    for (const material of MATERIALS) {
-      const perHour = rates.materialsPerSecond[material.id] * 3600;
-      if (RARITIES[material.rarity].rank >= RARITIES.rare.rank) rare += perHour;
-      else common += perHour;
-    }
-    this.setText(this.rateText, `+${formatPrecise(rates.moneyPerSecond)}/s`);
-    this.setText(this.tripText, `${Math.round(rates.speedKmh)} km/h · ${formatDistance(model.state.stats.distanceKm)}`);
-    this.setText(this.materialsRateText, `Materials +${formatPrecise(common)}/h`);
-    this.setText(this.rareRateText, `Rare finds +${formatPrecise(rare)}/h`);
-
-    this.queueMaterialPopups();
-    this.materialPopupTimer += dt;
-    const next = this.popupQueue[0];
-    if (next && this.materialPopupTimer >= MATERIAL_POPUP_INTERVAL) {
-      this.popupQueue.shift();
-      this.materialPopupTimer = 0;
-      this.showPopup(next.label, next.color, 'right');
-    }
-    this.moneyPopupTimer += dt;
-    if (this.moneyPopupTimer >= MONEY_POPUP_INTERVAL) {
-      this.moneyPopupTimer = 0;
-      if (rates.moneyPerSecond > 0) this.showPopup(`+${formatPrecise(rates.moneyPerSecond)}`, COLORS.money, 'left');
-    }
+    // The car is parked in the showroom: only the clouds drift. Runs happen in the Drive tab.
+    this.drive.update(dt, 0);
+    const record = model.state.run;
+    this.setText(
+      this.bestRunText,
+      record.runsCompleted > 0 ? `Best run ${formatDistance(record.bestDistanceKm)}` : 'No runs yet',
+    );
 
     // Redraw an open panel, and the part cards' badges, when anything shown has changed.
     this.panelTimer += dt;
@@ -221,23 +182,6 @@ export class GarageScene extends Phaser.Scene {
     if (target.text !== value) target.setText(value);
   }
 
-  private rememberMaterials(): void {
-    for (const id of MATERIAL_IDS) this.lastWhole[id] = Math.floor(this.ctx.model.state.resources.materials[id]);
-  }
-
-  /** Queues a pop-up for each material that reached another whole unit. */
-  private queueMaterialPopups(): void {
-    const { materials } = this.ctx.model.state.resources;
-    for (const material of MATERIALS) {
-      const whole = Math.floor(materials[material.id]);
-      const gained = whole - (this.lastWhole[material.id] ?? whole);
-      if (gained > 0 && this.popupQueue.length < 6) {
-        this.popupQueue.push({ label: `+${gained} ${material.name}`, color: RARITIES[material.rarity].color });
-      }
-      this.lastWhole[material.id] = whole;
-    }
-  }
-
   private createStage(width: number, height: number): void {
     this.drive = new DriveView(this, width, height, this.ctx.model.activeCar);
     this.drive.car.startIdleShudder();
@@ -247,18 +191,9 @@ export class GarageScene extends Phaser.Scene {
       ...overlayText(26, TEXT_COLORS.primary),
       wordWrap: { width: width * 0.64 },
     });
-    this.rateText = this.add
-      .text(width - PAD, 24, '', overlayText(48, cssColor(COLORS.money), true))
+    this.bestRunText = this.add
+      .text(width - PAD, 30, '', overlayText(30, cssColor(COLORS.accentAlt), true))
       .setOrigin(1, 0);
-    this.tripText = this.add
-      .text(width - PAD, 86, '', overlayText(26, TEXT_COLORS.primary))
-      .setOrigin(1, 0);
-    this.materialsRateText = this.add
-      .text(PAD, 132, '', overlayText(26, cssColor(RARITIES.common.color), true))
-      .setOrigin(0, 0);
-    this.rareRateText = this.add
-      .text(PAD, 168, '', overlayText(26, cssColor(RARITIES.rare.color), true))
-      .setOrigin(0, 0);
   }
 
   /** Text that floats up from the car and fades out. */

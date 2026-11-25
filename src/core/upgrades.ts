@@ -10,7 +10,9 @@ import {
   type MaterialAmounts,
 } from '../data/economy';
 import { MATERIAL_IDS } from '../data/materials';
+import { DRONE_MODELS, DRONES } from '../data/farm';
 import { partId, QUALITIES, TIER_ORDER } from '../data/vehicles';
+import type { FarmState } from './farm';
 import type { Resources } from './state';
 import { getPart, type CarState, type PartDef, type SlotId } from './vehicle';
 
@@ -97,5 +99,39 @@ export function buyLevelUp(car: CarState, slot: SlotId, resources: Resources): b
   const cost = levelUpCost(part, installed.level);
   if (!cost || !spend(resources, cost)) return false;
   installed.level += 1;
+  return true;
+}
+
+/** Price of building one more drone, given how many the farm already has; null at the limit. */
+export function droneBuildCost(currentCount: number): Cost | null {
+  if (currentCount >= DRONES.maxCount) return null;
+  // The first drone comes from a milestone; prices start with the second.
+  const n = Math.max(1, currentCount);
+  const c = DRONES.buildCost;
+  return {
+    money: curve(c.money, n),
+    materials: { scrapMetal: curve(c.scrapMetal, n), copperWire: curve(c.copperWire, n) },
+  };
+}
+
+/** Price of upgrading every drone to the next model, or null at the best model. */
+export function droneModelCost(currentModel: number): Cost | null {
+  const next = DRONE_MODELS[currentModel + 1];
+  return next ? next.cost : null;
+}
+
+/** Builds one more drone. Returns false if at the limit or unaffordable. */
+export function buyDrone(farm: FarmState, resources: Resources): boolean {
+  const cost = droneBuildCost(farm.droneCount);
+  if (!cost || farm.droneCount < 1 || !spend(resources, cost)) return false;
+  farm.droneCount += 1;
+  return true;
+}
+
+/** Upgrades the drones to the next model. Returns false if at the best model or unaffordable. */
+export function buyDroneModel(farm: FarmState, resources: Resources): boolean {
+  const cost = droneModelCost(farm.droneModel);
+  if (!cost || farm.droneCount < 1 || !spend(resources, cost)) return false;
+  farm.droneModel += 1;
   return true;
 }

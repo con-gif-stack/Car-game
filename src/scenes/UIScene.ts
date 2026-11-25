@@ -1,13 +1,11 @@
 import Phaser from 'phaser';
-import { formatDistance, formatDuration, formatNumber, formatPrecise } from '../core/format';
+import { formatDuration, formatNumber, formatPrecise } from '../core/format';
 import type { PendingOffline } from '../core/state';
-import { getActiveCar } from '../core/vehicle';
 import { BIOMES_BY_ID } from '../data/biomes';
 import { ECONOMY, FUEL_TANKS } from '../data/economy';
 import { MATERIALS_BY_ID } from '../data/materials';
 import type { MilestoneDef } from '../data/milestones';
 import { MATERIALS, RARITIES } from '../data/materials';
-import { CAR_MODELS } from '../data/vehicles';
 import { drawTabIcon } from '../ui/icons';
 import { TABS, type TabDef } from '../ui/tabs';
 import { COLORS, FONT_FAMILY, TEXT_COLORS } from '../ui/theme';
@@ -95,15 +93,15 @@ export class UIScene extends Phaser.Scene {
     this.welcomeDialog?.destroy();
     this.closeInventory();
     const { width, height } = this.ctx.layout;
-    const car = getActiveCar(this.ctx.model.state.garage);
-    const carName = CAR_MODELS[car.modelId]?.name ?? 'car';
+    const farm = this.ctx.model.state.farm;
+    const who = farm.droneCount > 1 ? `Your ${farm.droneCount} drones` : farm.droneCount === 1 ? 'Your drone' : 'Your garage';
     const capHours = ECONOMY.offline.capHours;
     const away = pending.capped ? `over ${capHours}h` : formatDuration(pending.seconds);
 
     const panel = new Panel(this, { area: { x: 0, y: 0, width, height }, align: 'center' });
     panel.text('WELCOME BACK', 28, TEXT_COLORS.accent, { bold: true, gapAfter: 16 });
     panel.text(`You were away for ${away}`, 44, TEXT_COLORS.primary, { bold: true, gapAfter: 24 });
-    panel.text(`Your ${carName} drove ${formatDistance(pending.distanceKm)} and earned`, 30, TEXT_COLORS.secondary, {
+    panel.text(`${who} brought in`, 30, TEXT_COLORS.secondary, {
       gapAfter: 8,
     });
     panel.text(`+${formatPrecise(pending.money)}`, 88, cssColor(COLORS.money), { bold: true, gapAfter: 16 });

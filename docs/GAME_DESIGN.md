@@ -438,6 +438,12 @@ Make players feel like they are constantly building something. Every upgrade sho
 | 2026-11-25 | Milestones (Step 5) | Reaching 2, 6 and 15 km unlocks the Rust Highway, Industrial Zone and Desert Canyons (their farms come in Step 8); 35 km is "Into the Unknown". Part milestones for having every slot at Used, Street, Sport and Race, plus "first run". Each pays money and sometimes materials, and is announced with a banner. Drones will be unlocked by a milestone in Step 6. |
 | 2026-11-25 | Balance after Step 5 | With real runs (casual player, using all refilled fuel at each check-in): Rust Highway day 1, Industrial Zone day 1.5, Desert Canyons day 7.5; all parts Race by day 26; longest wait for a part tier 4.5 days and for a biome 6 days. Tests enforce a week at most between biomes and leaving the Junkyard within two days. Common materials pile up from the car's stand-in idle income; drones rebalance this in Steps 6–7. |
 | 2026-11-25 | Save format v4 | Adds run records (best distance, runs, fuel tanks), reached milestones, unlocked biomes and unlocked features. |
+| 2026-11-25 | Drone look | **Small flying drones that visibly upgrade**, from scrap drones to advanced hovering drones. Four models so far: **Scrap Drone** (rusty, mismatched rotors, a bent arm), **Patched Drone** (grey frame, orange patches), **Sleek Drone** (white shell, cyan light), **Hover Drone** (no rotors; a disc riding a glowing ring). Resolves open question 12. |
+| 2026-11-25 | Farm (Step 6) | The **Farm** tab is home: a top-down, slightly angled view of the Junkyard with scrap heaps (Scrap Metal), tyre stacks (Rubber), a wire tangle (Copper Wire) and engine blocks (Aluminum) around the garage. **Tap a pile** to scavenge 1 unit (plus its scrap value in money); piles shrink and regrow. **20 taps** reach the "Scrap Collector" milestone, which unlocks drones and gives the **first drone**. Drones fly out, mine until full, fly back and unload hauls (materials + money) at the garage, including while away (average rate, 8-hour cap). Better drone models also make piles regrow faster ("dig deeper"). Numbers live in `src/data/farm.ts`. |
+| 2026-11-25 | Drone upgrades in Step 6 | So the economy works once the car stops earning, Step 6 includes two simple upgrades in a **Drone Bay**: **build more drones** (up to 5) and **upgrade the drone model** (Scrap → Patched → Sleek → Hover). Step 7 turns this into the full drone tree (separate speed, storage, mining and range branches) plus garage upgrades. |
+| 2026-11-25 | Idle income after Step 6 | The car no longer earns while idle. Idle income = **drone hauls** + the small **Rare/Epic trickle** (Salvage Magnet). Common and Uncommon materials come from the farm and run finds. The Garage shows the car parked in the showroom with its best run. |
+| 2026-11-25 | Balance after Step 6 | Casual player: first drone in the first session, drones 2–5 and the Patched model within ~2.5 days, Sleek around day 5; all parts Race by day 28.5; biomes on days 1, 2.5 and 9; longest wait 4.5 days for a part tier and 6.5 days for a biome. Common materials now pile up late (millions of Scrap Metal); Step 7's drone tree and garage upgrades should add uses for them. |
+| 2026-11-25 | Save format v5 | Adds the farm (deposit amounts, drone count and model, taps scavenged). Pending offline earnings no longer track distance. |
 | 2026-11-25 | Big numbers | Amounts use standard JavaScript numbers (up to about 10^308). They display as 1.23K, 45.6M and so on up to Dc, then aa, ab, and onwards. Revisit only if the economy ever needs larger numbers. |
 
 ## Open Questions
@@ -455,7 +461,7 @@ These need answers before the build step in brackets. When one is resolved, move
 9. **Taps during runs.** Should runs offer optional interaction, such as tapping for nitro bursts or choosing a lane? *(before Step 11)*
 10. **Distance unit.** Kilometres or miles (or a setting)? The game shows km for now. *(any time)*
 11. **Garage upgrades.** Drones return materials "to your garage, where they can upgrade your car and garage." What should garage upgrades be (storage, more drone bays, refinery)? *(before Step 7)*
-12. **Drone look.** What should drones look like (flying, wheeled, crawler), and should they change visibly with upgrades? *(before Step 6)*
+12. ~~**Drone look.**~~ Resolved: small flying drones that visibly upgrade, from scrap drones to hover drones (see Decisions Log).
 
 ## Art Style Notes
 
@@ -482,8 +488,8 @@ The game is built one step at a time. Each step should leave a playable, testabl
 *Steps 5 onward were re-planned with the core loop revision (Part 3).*
 
 - [x] **Step 5: Drive runs, milestones and the biome road.** The Drive tab: each run starts at the Junkyard on one endless road through biomes (Junkyard Wastes, Rust Highway, Industrial Zone, Desert Canyons), uses a fuel tank, and ends when fuel or the car's health runs out. Rewards: money per km, material finds, new-best bonus. Milestones announce new biomes and major unlocks. A World tab shows the biome road map and milestone list. The simulator uses real runs.
-- [ ] **Step 6: Farm screen.** The new home tab: a top-down, slightly angled view of the Junkyard. Tap scrap piles to scavenge; an early milestone unlocks the first drone, which collects and returns hauls (materials + money) to the garage, including while away. Replaces the car's idle-driving income.
-- [ ] **Step 7: Drone upgrade tree and garage.** Drone speed, storage, count, mining power, range and more; garage upgrades; economy rebalance with the simulator.
+- [x] **Step 6: Farm screen.** The new home tab: a top-down, slightly angled view of the Junkyard. Tap scrap piles to scavenge; an early milestone unlocks the first drone, which collects and returns hauls (materials + money) to the garage, including while away. Replaces the car's idle-driving income.
+- [ ] **Step 7: Drone upgrade tree and garage.** Expand Step 6's simple Drone Bay (count + model) into a full tree: drone speed, storage, mining power, range and more; garage upgrades (e.g. more drone bays); uses for surplus common materials; economy rebalance with the simulator.
 - [ ] **Step 8: Biome farms.** Reaching a biome on a run unlocks its farm, with its own deposits, materials and upgrades; switch between unlocked farms.
 - [ ] **Step 9: Basic customization.** Paint colors and finishes to start.
 - [ ] **Step 10: Skill tree.**
