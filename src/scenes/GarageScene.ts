@@ -6,11 +6,12 @@ import { computeCarStats, getInstalledPart, type SlotDef, type SlotId } from '..
 import { PART_LEVELS } from '../data/economy';
 import { MATERIAL_IDS, MATERIALS, RARITIES, type MaterialId } from '../data/materials';
 import { CAR_MODELS, QUALITIES, SLOTS, STATS } from '../data/vehicles';
-import { COLORS, FONT_FAMILY, TEXT_COLORS } from '../ui/theme';
+import { COLORS, TEXT_COLORS } from '../ui/theme';
 import type { AppContext } from './context';
 import { DriveView } from './DriveView';
 import { cssColor } from './panel';
 import { openPartPanel, openWorkshopPanel, panelSignature } from './panels';
+import { overlayStyle, textStyle } from './textStyles';
 
 const PAD = 32;
 const SECTION_GAP = 24;
@@ -47,19 +48,8 @@ interface PartCard {
 
 type OpenPanel = { kind: 'part'; slot: SlotDef } | { kind: 'workshop' };
 
-const text = (size: number, color: string, bold = false): Phaser.Types.GameObjects.Text.TextStyle => ({
-  fontFamily: FONT_FAMILY,
-  fontSize: `${size}px`,
-  color,
-  fontStyle: bold ? 'bold' : 'normal',
-});
-
-/** Text drawn over the scenery gets a dark outline so it stays readable on a bright sky. */
-const overlayText = (size: number, color: string, bold = false): Phaser.Types.GameObjects.Text.TextStyle => ({
-  ...text(size, color, bold),
-  stroke: '#0b0b14',
-  strokeThickness: Math.max(4, Math.round(size / 7)),
-});
+const text = textStyle;
+const overlayText = overlayStyle;
 
 /**
  * Garage tab: the active car idle-driving at the top, then its stats and the part in each slot.

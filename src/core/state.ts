@@ -1,11 +1,14 @@
+import type { BiomeId } from '../data/biomes';
+import { FUEL_TANKS } from '../data/economy';
 import { emptyMaterials, type MaterialId } from '../data/materials';
+import type { FuelState } from './run';
 import { createStarterGarage, type GarageState } from './vehicle';
 
 /**
  * The save-file version. Bump it whenever the shape of GameState changes in a way that
  * needs converting old saves, and add a migration in save.ts.
  */
-export const SAVE_VERSION = 3;
+export const SAVE_VERSION = 4;
 
 export type MaterialStock = Record<MaterialId, number>;
 
@@ -39,7 +42,22 @@ export interface GameState {
   pendingOffline: PendingOffline;
   /** Garage-wide upgrades that aren't car parts. */
   workshop: WorkshopState;
+  /** Drive runs: records and fuel. */
+  run: RunRecord;
+  /** Ids of milestones reached (see src/data/milestones.ts). */
+  milestones: string[];
+  /** Biomes reached on runs, which can be farmed (the Junkyard always). */
+  unlockedBiomes: BiomeId[];
+  /** Features switched on by milestones, e.g. 'drones'. */
+  unlockedFeatures: string[];
   stats: GameStats;
+}
+
+export interface RunRecord {
+  /** Furthest distance reached on any run (km). */
+  bestDistanceKm: number;
+  runsCompleted: number;
+  fuel: FuelState;
 }
 
 export interface WorkshopState {
@@ -74,6 +92,10 @@ export function createNewState(now: number): GameState {
     garage: createStarterGarage(),
     pendingOffline: emptyPendingOffline(),
     workshop: { salvageMagnetLevel: 0 },
+    run: { bestDistanceKm: 0, runsCompleted: 0, fuel: { tanks: FUEL_TANKS.max, lastRefillAt: now } },
+    milestones: [],
+    unlockedBiomes: ['junkyard'],
+    unlockedFeatures: [],
     stats: {
       playTimeSeconds: 0,
       distanceKm: 0,

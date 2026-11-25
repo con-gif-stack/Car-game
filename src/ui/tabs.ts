@@ -1,43 +1,44 @@
-export type TabId = 'garage' | 'driving' | 'progression' | 'world';
+export type TabId = 'garage' | 'drive' | 'upgrades' | 'world';
 
 export interface TabDef {
   id: TabId;
   label: string;
   /** Phaser scene key of the screen shown for this tab. */
   sceneKey: string;
-  /** One-line purpose, from the design doc (section 6, Primary Game Tabs). */
+  /** One-line purpose (design doc Part 3, Screens). */
   description: string;
   /** The roadmap step that builds this tab, shown on its placeholder until it exists. */
   plannedStep?: string;
 }
 
-/** The four main tabs, in tab-bar order. */
+/**
+ * The main tabs, in tab-bar order. The Farm tab joins as the first tab in Step 6
+ * (design doc Part 3: Farm | Garage | Drive | Upgrades | World).
+ */
 export const TABS: readonly TabDef[] = [
   {
     id: 'garage',
     label: 'Garage',
     sceneKey: 'GarageTab',
-    description: 'Vehicle upgrades and customization.',
+    description: 'Your car, its stats and its parts.',
   },
   {
-    id: 'driving',
-    label: 'Driving',
-    sceneKey: 'DrivingTab',
-    description: 'Interactive road-based challenges.',
-    plannedStep: 'Step 5 · Interactive driving run',
+    id: 'drive',
+    label: 'Drive',
+    sceneKey: 'DriveTab',
+    description: 'Drive the endless road and see how far your car gets.',
   },
   {
-    id: 'progression',
-    label: 'Progression',
-    sceneKey: 'ProgressionTab',
-    description: 'Skill tree and long-term upgrades.',
-    plannedStep: 'Step 9 · Skill tree',
+    id: 'upgrades',
+    label: 'Upgrades',
+    sceneKey: 'UpgradesTab',
+    description: 'Drone upgrades, and later the skill tree.',
+    plannedStep: 'Step 7 · Drone upgrade tree',
   },
   {
     id: 'world',
     label: 'World',
     sceneKey: 'WorldTab',
-    description: 'Biome progression and resource discovery.',
-    plannedStep: 'Step 6 · First biome and road progression',
+    description: 'The biome road map and your milestones.',
   },
 ];

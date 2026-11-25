@@ -20,6 +20,15 @@ describe.each(PROFILES)('balance: $name player', (profile) => {
     expect(result.longestPurchaseGap.days).toBeLessThanOrEqual(2);
   });
 
+  it('reaches every biome on runs, never waiting more than a week for the next one', () => {
+    for (const biome of result.biomes) expect(biome.day, biome.name).not.toBeNull();
+    expect(result.longestBiomeWait.days).toBeLessThanOrEqual(7);
+  });
+
+  it('leaves the Junkyard within the first day or two', () => {
+    expect(result.biomes[1]?.day ?? Infinity).toBeLessThanOrEqual(2);
+  });
+
   it('makes a first purchase on the first day', () => {
     expect(result.purchases[0]?.day ?? Infinity).toBeLessThan(1);
   });

@@ -105,14 +105,5 @@ export function pointInPolygon(px: number, py: number, points: readonly Point[])
   return inside;
 }
 
-/** Small deterministic random generator, so generated art looks the same every time. */
-export function seededRandom(seed: number): () => number {
-  let s = seed >>> 0;
-  return () => {
-    s = (s + 0x6d2b79f5) >>> 0;
-    let t = s;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
+// The random generator lives in core so game logic can use it too.
+export { seededRandom } from '../core/random';

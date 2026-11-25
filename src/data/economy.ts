@@ -157,19 +157,32 @@ export const SLOT_COST_MULTIPLIERS: Record<SlotId, number> = {
   fuelSystem: 0.8,
 };
 
-/**
- * ASSUMPTION used only by the balance simulator until driving runs exist (Step 5):
- * what each run gives. Step 5 replaces this with real run rewards.
- */
-export const PLANNED_RUNS = {
-  runsPerDay: 2,
-  /** Rare-and-above materials per run for the starter car. */
-  materialsPerRun: { titanium: 1.2, carbonFiber: 0.8 } as MaterialAmounts,
-  /** Ceramic per run, once progress reaches `ceramicFromProgress`. */
-  ceramicPerRun: 0.6,
-  ceramicFromProgress: 2,
-  /** Rewards grow with the car: × (power / 58) ^ this … */
-  powerExponent: 0.6,
-  /** … and × (1 + this × progress). */
-  progressBonus: 0.3,
+/** Drive runs: how the car's stats turn into speed, fuel and toughness on the road. */
+export const RUN_TUNING = {
+  /** Top speed of the starter car (58 hp), in km/h. */
+  baseSpeedKmh: 70,
+  /** Top speed grows as (power / 58) ^ this, so upgraded cars race through early biomes. */
+  speedPowerExponent: 1.4,
+  /** Seconds of driving on a full tank for the starter car (fuel efficiency 20) in the Junkyard. */
+  baseTankSeconds: 60,
+  /** Tank time grows as (fuel efficiency / 20) ^ this. */
+  tankEfficiencyExponent: 0.35,
+  /** Car health of the starter car (durability 21). */
+  baseHealth: 100,
+  /** Health grows as (durability / 21) ^ this. */
+  healthDurabilityExponent: 0.8,
+  /** Speed multiplier is (traction / grip demand) ^ this when traction falls short… */
+  tractionExponent: 0.8,
+  /** …but never below this share of top speed. */
+  minTractionFactor: 0.2,
+  /** Each run's luck multiplies material finds by a random value in this range. */
+  findLuck: { min: 0.7, max: 1.3 },
+  /** Extra money per km of new ground beyond the previous best (× the biome's pay). */
+  newBestBonus: 1,
+};
+
+/** Fuel tanks: each run uses one; they refill over time. */
+export const FUEL_TANKS = {
+  max: 3,
+  refillMinutes: 40,
 };

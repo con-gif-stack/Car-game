@@ -2,7 +2,10 @@ import Phaser from 'phaser';
 import { formatDistance, formatDuration, formatNumber, formatPrecise } from '../core/format';
 import type { PendingOffline } from '../core/state';
 import { getActiveCar } from '../core/vehicle';
-import { ECONOMY } from '../data/economy';
+import { BIOMES_BY_ID } from '../data/biomes';
+import { ECONOMY, FUEL_TANKS } from '../data/economy';
+import { MATERIALS_BY_ID } from '../data/materials';
+import type { MilestoneDef } from '../data/milestones';
 import { MATERIALS, RARITIES } from '../data/materials';
 import { CAR_MODELS } from '../data/vehicles';
 import { drawTabIcon } from '../ui/icons';
@@ -16,12 +19,17 @@ import { materialIconKey, moneyIconKey } from './textures';
 /** Most material icons shown in the top bar's Materials button. */
 const HUD_MATERIAL_ICONS = 5;
 
+/** How long a milestone banner stays up (ms). */
+const BANNER_HOLD_MS = 3500;
+
 interface TabButton {
   tab: TabDef;
   background: Phaser.GameObjects.Rectangle;
   indicator: Phaser.GameObjects.Rectangle;
   icon: Phaser.GameObjects.Graphics;
   label: Phaser.GameObjects.Text;
+  /** Dot shown when the tab needs attention (e.g. Drive with full fuel tanks). */
+  dot: Phaser.GameObjects.Arc;
   centerX: number;
   iconY: number;
 }
@@ -41,6 +49,9 @@ export class UIScene extends Phaser.Scene {
   private materialIconsY = 0;
   private debugText: Phaser.GameObjects.Text | null = null;
   private welcomeDialog: Phaser.GameObjects.Container | null = null;
+  private readonly bannerQueue: MilestoneDef[] = [];
+  private banner: Phaser.GameObjects.Container | null = null;
+  private dotTimer = 0;
   private inventory: Phaser.GameObjects.Container | null = null;
 
   constructor(private readonly ctx: AppContext) {
@@ -73,6 +84,10 @@ export class UIScene extends Phaser.Scene {
     const { model } = this.ctx;
     if (model.state.pendingOffline.money > 0) this.showWelcomeBack(model.state.pendingOffline);
     model.events.on('offlineEarnings', (pending) => this.showWelcomeBack(pending));
+    model.events.on('milestoneReached', (milestone) => {
+      this.bannerQueue.push(milestone);
+      if (!this.banner) this.showNextBanner();
+    });
   }
 
   /** "Welcome back" summary of what the car earned while the player was away. */
@@ -138,6 +153,82 @@ export class UIScene extends Phaser.Scene {
     if (this.moneyText.text !== money) this.moneyText.setText(money);
     this.updateMaterialIcons();
     this.updateDebugOverlay();
+    this.dotTimer += this.game.loop.delta / 1000;
+    if (this.dotTimer >= 0.5) {
+      this.dotTimer = 0;
+      this.updateTabDots();
+    }
+  }
+
+  /** Drive tab gets a dot when every fuel tank is full (refills are being wasted). */
+  private updateTabDots(): void {
+    const full = this.ctx.model.fuel().tanks >= FUEL_TANKS.max;
+    for (const button of this.tabButtons) {
+      button.dot.setVisible(button.tab.id === 'drive' && full && this.activeTab?.id !== 'drive');
+    }
+  }
+
+  /** What a milestone gives, as one line. */
+  private rewardLine(milestone: MilestoneDef): string {
+    const { reward } = milestone;
+    const parts: string[] = [];
+    if (reward.unlockBiome) parts.push(`${BIOMES_BY_ID[reward.unlockBiome].name} unlocked`);
+    if (reward.unlockFeature) parts.push(`${reward.unlockFeature} unlocked`);
+    if (reward.money) parts.push(`+${formatNumber(reward.money)} money`);
+    for (const [id, amount] of Object.entries(reward.materials ?? {})) {
+      parts.push(`+${formatNumber(amount ?? 0)} ${MATERIALS_BY_ID[id as keyof typeof MATERIALS_BY_ID].name}`);
+    }
+    return parts.join(' · ');
+  }
+
+  /** Slides the next milestone banner down from under the top bar. Tap it to dismiss early. */
+  private showNextBanner(): void {
+    const milestone = this.bannerQueue.shift();
+    if (!milestone) return;
+    const { hud, width } = this.ctx.layout;
+    const bannerWidth = width - 48;
+    const height = 190;
+    const targetY = hud.height + 16;
+
+    const background = this.add
+      .rectangle(24, 0, bannerWidth, height, COLORS.panelRaised)
+      .setOrigin(0)
+      .setRounded(24)
+      .setStrokeStyle(4, COLORS.accent)
+      .setInteractive({ useHandCursor: true });
+    const style = (size: number, color: string, bold = false) => ({
+      fontFamily: FONT_FAMILY,
+      fontSize: `${size}px`,
+      fontStyle: bold ? 'bold' : 'normal',
+      color,
+      wordWrap: { width: bannerWidth - 64 },
+    });
+    const kicker = this.add.text(56, 22, '★ MILESTONE', style(24, TEXT_COLORS.accent, true));
+    const title = this.add.text(56, 56, milestone.title, style(44, TEXT_COLORS.primary, true));
+    const reward = this.add.text(56, 116, this.rewardLine(milestone) || milestone.description, style(26, cssColor(COLORS.money), true));
+    const banner = this.add.container(0, -height - 20, [background, kicker, title, reward]).setDepth(900);
+    this.banner = banner;
+
+    const leave = () => {
+      if (this.banner !== banner) return;
+      this.tweens.killTweensOf(banner);
+      this.tweens.add({
+        targets: banner,
+        y: -height - 20,
+        alpha: 0,
+        duration: 280,
+        ease: 'Cubic.easeIn',
+        onComplete: () => {
+          banner.destroy();
+          this.banner = null;
+          this.showNextBanner();
+        },
+      });
+    };
+    background.on('pointerup', leave);
+    this.tweens.add({ targets: banner, y: targetY, duration: 380, ease: 'Back.easeOut' });
+    // When several milestones arrive together, show each more briefly.
+    this.time.delayedCall(this.bannerQueue.length > 0 ? BANNER_HOLD_MS / 2 : BANNER_HOLD_MS, leave);
   }
 
   showTab(tab: TabDef): void {
@@ -242,7 +333,8 @@ export class UIScene extends Phaser.Scene {
         })
         .setOrigin(0.5);
 
-      this.tabButtons.push({ tab, background, indicator, icon, label, centerX, iconY: tabBar.y + 78 });
+      const dot = this.add.circle(centerX + 46, tabBar.y + 44, 10, COLORS.accent).setVisible(false);
+      this.tabButtons.push({ tab, background, indicator, icon, label, dot, centerX, iconY: tabBar.y + 78 });
     });
   }
 

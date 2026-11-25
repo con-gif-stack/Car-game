@@ -1,6 +1,8 @@
 import { formatPrecise } from '../core/format';
 import { computeIdleRates, computeOfflineEarnings } from '../core/idle';
-import { emptyResources, type Resources } from '../core/state';
+import { checkMilestones } from '../core/milestones';
+import { runRewards, simulateRun, useTank } from '../core/run';
+import { createNewState, type Resources } from '../core/state';
 import {
   buyLevelUp,
   buyNextTier,
@@ -11,10 +13,11 @@ import {
   spend,
   tierCost,
 } from '../core/upgrades';
-import { carProgress, computeCarStats, createCar, getPart, type CarState, type QualityId } from '../core/vehicle';
-import { ECONOMY, PLANNED_RUNS, type Cost } from '../data/economy';
+import { carProgress, computeCarStats, getActiveCar, getPart, type CarState, type QualityId } from '../core/vehicle';
+import { BIOMES } from '../data/biomes';
+import { ECONOMY, FUEL_TANKS, type Cost } from '../data/economy';
 import { MATERIAL_IDS, MATERIALS } from '../data/materials';
-import { QUALITIES, SLOTS, STARTER_MODEL_ID, TIER_ORDER } from '../data/vehicles';
+import { QUALITIES, SLOTS, TIER_ORDER } from '../data/vehicles';
 
 /*
  * Balance simulator: plays the economy forward for a type of player, buying upgrades
@@ -60,6 +63,12 @@ export interface SimResult {
   days: number;
   /** What the player holds when the simulation ends. */
   finalResources: Resources;
+  /** Day each biome was first reached on a run (null if never), in road order. */
+  biomes: { name: string; day: number | null }[];
+  /** Longest wait between reaching one biome and the next, in days. */
+  longestBiomeWait: { days: number; endedWith: string };
+  runsDriven: number;
+  bestDistanceKm: number;
 }
 
 const DAY = 86_400;
@@ -88,11 +97,13 @@ function minus(resources: Resources, reserve: Cost): Resources {
 }
 
 export function simulate(profile: PlayerProfile, maxDays = 180): SimResult {
-  const car = createCar('sim', STARTER_MODEL_ID);
-  const resources = emptyResources();
+  const state = createNewState(0);
+  const car = getActiveCar(state.garage);
+  const resources = state.resources;
   let magnetLevel = 0;
   let t = 0;
-  let lastRunDay = -1;
+  let runsDriven = 0;
+  const biomeDays = new Map<string, number>([[BIOMES[0]?.id ?? '', 0]]);
 
   const purchases: Purchase[] = [];
   const tierMilestones = TIER_ORDER.slice(1).map((quality) => ({ quality, day: null as number | null }));
@@ -111,15 +122,20 @@ export function simulate(profile: PlayerProfile, maxDays = 180): SimResult {
     }
   };
 
-  const runRewards = () => {
-    const progress = carProgress(car);
-    const scale =
-      (computeCarStats(car).power / 58) ** PLANNED_RUNS.powerExponent * (1 + PLANNED_RUNS.progressBonus * progress);
-    for (const [id, amount] of Object.entries(PLANNED_RUNS.materialsPerRun)) {
-      resources.materials[id as keyof typeof resources.materials] += (amount ?? 0) * scale * PLANNED_RUNS.runsPerDay;
-    }
-    if (progress >= PLANNED_RUNS.ceramicFromProgress) {
-      resources.materials.ceramic += PLANNED_RUNS.ceramicPerRun * scale * PLANNED_RUNS.runsPerDay;
+  /** Spends every fuel tank available now on drive runs, collecting rewards and milestones. */
+  const driveRuns = () => {
+    while (useTank(state.run.fuel, t * 1000)) {
+      const run = simulateRun(computeCarStats(car), 1000 + runsDriven);
+      const rewards = runRewards(run, state.run.bestDistanceKm);
+      resources.money += rewards.money + rewards.bonusMoney;
+      for (const id of MATERIAL_IDS) resources.materials[id] += rewards.finds[id];
+      state.run.bestDistanceKm = Math.max(state.run.bestDistanceKm, run.distanceKm);
+      state.run.runsCompleted += 1;
+      runsDriven += 1;
+      for (const milestone of checkMilestones(state)) {
+        const biome = milestone.reward.unlockBiome;
+        if (biome && !biomeDays.has(biome)) biomeDays.set(biome, t / DAY);
+      }
     }
   };
 
@@ -193,13 +209,12 @@ export function simulate(profile: PlayerProfile, maxDays = 180): SimResult {
   const topRank = TIER_ORDER.length - 1;
 
   while (t < maxDays * DAY) {
-    // Driving runs (assumed until Step 5): the day's runs happen at the first check-in.
-    const day = Math.floor(t / DAY);
-    if (day > lastRunDay) {
-      lastRunDay = day;
-      runRewards();
-    }
+    // Each check-in: drive runs on whatever fuel has refilled, then shop, then drive again
+    // if new parts were bought (players like to test upgrades straight away).
+    driveRuns();
     shop();
+    driveRuns();
+    checkMilestones(state);
     recordMilestones();
     if (lowestRank(car) >= topRank) break;
     earn(session, false);
@@ -218,7 +233,20 @@ export function simulate(profile: PlayerProfile, maxDays = 180): SimResult {
   };
 
   const tierLabel = (q: QualityId) => `All parts ${QUALITIES[q].label} or better`;
+  // Biomes in road order (the last, endless one has no unlock milestone).
+  const biomes = BIOMES.slice(0, -1).map((b) => ({ name: b.name, day: biomeDays.get(b.id) ?? null }));
+  let longestBiomeWait = { days: 0, endedWith: '' };
+  for (let i = 1; i < biomes.length; i++) {
+    const prev = biomes[i - 1]?.day;
+    const next = biomes[i]?.day ?? null;
+    const wait = (next ?? t / DAY) - (prev ?? t / DAY);
+    if (wait > longestBiomeWait.days) longestBiomeWait = { days: wait, endedWith: biomes[i]?.name ?? '' };
+  }
   return {
+    biomes,
+    longestBiomeWait,
+    runsDriven,
+    bestDistanceKm: state.run.bestDistanceKm,
     profile,
     purchases,
     milestones: [
@@ -241,7 +269,15 @@ export function formatReport(result: SimResult): string {
   const lines: string[] = [];
   const p = result.profile;
   lines.push(`=== ${p.name} player: ${p.checkInsPerDay} check-ins a day, ${p.sessionMinutes} min each ===`);
-  lines.push(`Offline cap ${ECONOMY.offline.capHours}h · runs assumed: ${PLANNED_RUNS.runsPerDay}/day`);
+  lines.push(
+    `Offline cap ${ECONOMY.offline.capHours}h · fuel: ${FUEL_TANKS.max} tanks, one per ${FUEL_TANKS.refillMinutes} min`,
+  );
+  lines.push('');
+  lines.push(`Biomes reached on runs (${result.runsDriven} runs, best ${result.bestDistanceKm.toFixed(1)} km):`);
+  for (const b of result.biomes) lines.push(`  ${b.name.padEnd(34)} ${b.day === null ? 'not reached' : fmtDay(b.day)}`);
+  lines.push(
+    `  Longest wait for the next biome: ${result.longestBiomeWait.days.toFixed(2)} days (${result.longestBiomeWait.endedWith})`,
+  );
   lines.push('');
   lines.push('Milestones:');
   for (const m of result.milestones) lines.push(`  ${m.label.padEnd(34)} ${m.day === null ? 'not reached' : fmtDay(m.day)}`);

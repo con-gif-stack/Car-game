@@ -3,7 +3,7 @@
 An idle car progression game for mobile (with desktop for testing). Players start with a rusty, barely working car and slowly turn it into a powerful machine. They earn money and materials while idle, upgrade and customize the car, and take it on a limited number of interactive driving runs each day through increasingly challenging biomes.
 
 - **Design plan, decisions and roadmap:** [`docs/GAME_DESIGN.md`](docs/GAME_DESIGN.md)
-- **Status:** Steps 0–4 are done (project setup, garage, idle driving with offline earnings, materials economy and balance simulator, buying upgrades with visible part changes). Step 5 (interactive driving runs) is next.
+- **Status:** Steps 0–5 are done (garage and car upgrades, materials economy and balance simulator, drive runs through the biome road with fuel tanks and milestones, World map). Step 6 (the top-down farm screen with drones) is next. The core loop was revised on 2026-11-25; see Part 3 of the design doc.
 
 ## Running it
 

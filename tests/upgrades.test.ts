@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { parseSave } from '../src/core/save';
-import { emptyResources, type Resources } from '../src/core/state';
+import { emptyResources, SAVE_VERSION, type Resources } from '../src/core/state';
 import {
   buyLevelUp,
   buyNextTier,
@@ -169,10 +169,10 @@ describe('save migrations', () => {
     stats: { playTimeSeconds: 10, distanceKm: 1, sessions: 2 },
   };
 
-  it('v1 → v3: old part ids become tiered parts at level 1', () => {
+  it('v1 → current: old part ids become tiered parts at level 1', () => {
     const state = parseSave(JSON.stringify(v1), 0);
     const car = state && getActiveCar(state.garage);
-    expect(state?.version).toBe(3);
+    expect(state?.version).toBe(SAVE_VERSION);
     expect(car?.parts.engine).toEqual({ partId: 'engine-worn', level: 1 });
     expect(car?.parts.tires).toEqual({ partId: 'tires-worn', level: 1 });
     expect(car?.parts.turbo).toBeNull();

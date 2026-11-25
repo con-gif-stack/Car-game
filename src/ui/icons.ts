@@ -28,7 +28,7 @@ export function drawTabIcon(g: Graphics, id: TabId, cx: number, cy: number, size
       }
       break;
     }
-    case 'driving': {
+    case 'drive': {
       // Steering wheel.
       g.strokeCircle(cx, cy, s * 0.88);
       g.fillCircle(cx, cy, s * 0.22);
@@ -36,7 +36,7 @@ export function drawTabIcon(g: Graphics, id: TabId, cx: number, cy: number, size
       g.lineBetween(cx, cy, cx, cy + s * 0.88);
       break;
     }
-    case 'progression': {
+    case 'upgrades': {
       // A small skill tree: one root node branching into two.
       const root = { x: cx, y: cy + s * 0.65 };
       const left = { x: cx - s * 0.6, y: cy - s * 0.6 };

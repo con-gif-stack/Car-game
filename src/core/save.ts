@@ -1,4 +1,5 @@
 import { createNewState, SAVE_VERSION, type GameState } from './state';
+import { repairBiomes, repairFeatures, repairMilestones } from './milestones';
 import { repairGarage } from './vehicle';
 
 /** The subset of the browser's localStorage that saving needs. Swappable for tests or native storage. */
@@ -83,6 +84,9 @@ const MIGRATIONS: Record<number, (save: RawSave) => RawSave> = {
     };
     return { ...save, version: 3, resources: convert(save.resources), pendingOffline: convert(save.pendingOffline) };
   },
+  // v3 → v4: drive runs, milestones and biomes were added. Their defaults (no runs yet, full
+  // fuel tanks, only the Junkyard unlocked) are filled in when the save is loaded.
+  3: (save) => ({ ...save, version: 4 }),
 };
 
 function isRecord(value: unknown): value is RawSave {
@@ -134,8 +138,11 @@ export function parseSave(raw: string, now: number): GameState | null {
     if (!isRecord(parsed)) return null;
     const migrated = migrate(parsed);
     const state = conformTo(createNewState(now), migrated);
-    // conformTo can't check list contents, so the garage is validated separately.
+    // conformTo can't check list contents, so lists are validated separately.
     state.garage = repairGarage(migrated.garage);
+    state.milestones = repairMilestones(migrated.milestones);
+    state.unlockedBiomes = repairBiomes(migrated.unlockedBiomes);
+    state.unlockedFeatures = repairFeatures(migrated.unlockedFeatures);
     state.version = SAVE_VERSION;
     return state;
   } catch {

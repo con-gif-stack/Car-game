@@ -2,9 +2,11 @@ import Phaser from 'phaser';
 import { GameModel } from './core/GameModel';
 import { MemoryStorage, SaveManager, type KeyValueStorage } from './core/save';
 import type { AppContext } from './scenes/context';
+import { DriveScene } from './scenes/DriveScene';
 import { GarageScene } from './scenes/GarageScene';
 import { PlaceholderTabScene } from './scenes/PlaceholderTabScene';
 import { UIScene } from './scenes/UIScene';
+import { WorldScene } from './scenes/WorldScene';
 import { computeGameHeight, computeLayout, GAME_WIDTH } from './ui/layout';
 import { TABS, type TabId } from './ui/tabs';
 import { COLORS } from './ui/theme';
@@ -23,6 +25,8 @@ function getStorage(): KeyValueStorage {
 /** Tabs that have a real screen; the rest show a placeholder. */
 const TAB_SCENES: Partial<Record<TabId, (ctx: AppContext) => Phaser.Scene>> = {
   garage: (ctx) => new GarageScene(ctx),
+  drive: (ctx) => new DriveScene(ctx),
+  world: (ctx) => new WorldScene(ctx),
 };
 
 const now = () => Date.now();

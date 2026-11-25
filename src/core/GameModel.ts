@@ -6,6 +6,9 @@ import { Emitter } from './events';
 import { computeIdleRates, computeOfflineEarnings, type IdleRates } from './idle';
 import type { SaveManager } from './save';
 import { emptyPendingOffline, type Earnings, type GameState, type PendingOffline } from './state';
+import type { MilestoneDef } from '../data/milestones';
+import { checkMilestones } from './milestones';
+import { createRun, msUntilNextTank, refillFuel, runRewards, useTank, type RunRewards, type RunState } from './run';
 import { buyLevelUp, buyNextTier, salvageMagnetCost, spend } from './upgrades';
 import { carProgress, computeCarStats, getActiveCar, type CarState, type SlotId } from './vehicle';
 
@@ -24,7 +27,19 @@ export type GameEvents = {
   offlineCollected: [money: number];
   /** Something was bought. `slot` is set for part purchases. */
   purchased: [kind: PurchaseKind, slot: SlotId | null];
+  /** A drive run ended and its rewards were added. */
+  runFinished: [summary: RunSummary];
+  /** A milestone was reached (one event per milestone). */
+  milestoneReached: [milestone: MilestoneDef];
 };
+
+/** What a finished run achieved. */
+export interface RunSummary extends RunRewards {
+  distanceKm: number;
+  previousBestKm: number;
+  endReason: RunState['endReason'];
+  milestones: MilestoneDef[];
+}
 
 /**
  * The game's logic and state, kept separate from Phaser so it can be unit-tested.
@@ -84,6 +99,43 @@ export class GameModel {
     const ok = cost !== null && spend(this.state.resources, cost);
     if (ok) this.state.workshop.salvageMagnetLevel += 1;
     return this.afterPurchase(ok, 'salvageMagnet', null);
+  }
+
+  /** Fuel tanks right now (refilled up to the current time). */
+  fuel(): { tanks: number; msUntilNext: number } {
+    const fuel = refillFuel(this.state.run.fuel, this.now());
+    return { tanks: fuel.tanks, msUntilNext: msUntilNextTank(fuel, this.now()) };
+  }
+
+  /** Starts a drive run, using one fuel tank. Returns null if there is no fuel. */
+  startRun(): RunState | null {
+    if (!useTank(this.state.run.fuel, this.now())) return null;
+    this.save();
+    const seed = this.state.createdAt + this.state.run.runsCompleted * 7919;
+    return createRun(computeCarStats(this.activeCar), seed);
+  }
+
+  /** Applies a finished run: rewards, best distance, milestones. Returns what it achieved. */
+  finishRun(run: RunState): RunSummary {
+    const record = this.state.run;
+    const previousBestKm = record.bestDistanceKm;
+    const rewards = runRewards(run, previousBestKm);
+    this.state.resources.money += rewards.money + rewards.bonusMoney;
+    for (const id of MATERIAL_IDS) this.state.resources.materials[id] += rewards.finds[id];
+    record.bestDistanceKm = Math.max(previousBestKm, run.distanceKm);
+    record.runsCompleted += 1;
+    const milestones = checkMilestones(this.state);
+    this.save();
+    const summary: RunSummary = {
+      ...rewards,
+      distanceKm: run.distanceKm,
+      previousBestKm,
+      endReason: run.endReason,
+      milestones,
+    };
+    this.events.emit('runFinished', summary);
+    this.announce(milestones);
+    return summary;
   }
 
   /** Adds waiting offline earnings to the player's resources. Returns the money collected. */
@@ -150,9 +202,15 @@ export class GameModel {
 
   private afterPurchase(ok: boolean, kind: PurchaseKind, slot: SlotId | null): boolean {
     if (!ok) return false;
+    const milestones = checkMilestones(this.state);
     this.save();
     this.events.emit('purchased', kind, slot);
+    this.announce(milestones);
     return true;
+  }
+
+  private announce(milestones: MilestoneDef[]): void {
+    for (const milestone of milestones) this.events.emit('milestoneReached', milestone);
   }
 
   private addEarnings(earned: Earnings): void {
