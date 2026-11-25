@@ -18,6 +18,8 @@ export interface Resources {
 export interface GameStats {
   /** Total seconds the game has been open and running. */
   playTimeSeconds: number;
+  /** Total distance idle-driven, including while away (km). */
+  distanceKm: number;
   /** How many times the game has been started. */
   sessions: number;
 }
@@ -32,7 +34,18 @@ export interface GameState {
   resources: Resources;
   /** The player's cars and which one is in use. */
   garage: GarageState;
+  /** Earnings from time away, waiting for the player to collect them. */
+  pendingOffline: PendingOffline;
   stats: GameStats;
+}
+
+export interface PendingOffline {
+  money: number;
+  distanceKm: number;
+  /** Seconds away that counted toward these earnings. */
+  seconds: number;
+  /** True if any absence went past the offline cap. */
+  capped: boolean;
 }
 
 export function createNewState(now: number): GameState {
@@ -46,8 +59,10 @@ export function createNewState(now: number): GameState {
       rareMaterials: 0,
     },
     garage: createStarterGarage(),
+    pendingOffline: { money: 0, distanceKm: 0, seconds: 0, capped: false },
     stats: {
       playTimeSeconds: 0,
+      distanceKm: 0,
       sessions: 0,
     },
   };

@@ -38,6 +38,24 @@ export function formatNumber(value: number): string {
   return sign + truncated.toFixed(decimals) + suffixForTier(tier);
 }
 
+/**
+ * Like formatNumber, but keeps decimals on small values so slow rates stay readable:
+ * 1.07, 12.5, 345, then 1.23K and up. Rounded down.
+ */
+export function formatPrecise(value: number): string {
+  if (!Number.isFinite(value) || Math.abs(value) >= 1000) return formatNumber(value);
+  const abs = Math.abs(value);
+  const decimals = abs < 10 ? 2 : abs < 100 ? 1 : 0;
+  const factor = 10 ** decimals;
+  const truncated = Math.floor(abs * factor + 1e-9) / factor;
+  return (value < 0 ? '-' : '') + truncated.toFixed(decimals);
+}
+
+/** Formats a distance in km: 0.42 km, 12.5 km, 345 km, 1.23K km. */
+export function formatDistance(km: number): string {
+  return `${formatPrecise(km)} km`;
+}
+
 /** Formats a duration: 45s, 3m 12s, 2h 05m, 3d 04h. */
 export function formatDuration(totalSeconds: number): string {
   const seconds = Number.isFinite(totalSeconds) ? Math.max(0, Math.floor(totalSeconds)) : 0;

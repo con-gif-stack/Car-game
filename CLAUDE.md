@@ -31,9 +31,10 @@ The full design plan, decisions, open questions and build roadmap are in
 ## Code layout
 
 - `src/core/`: game logic and state (`GameModel`, saving, fixed-step clock, number formatting). **No Phaser imports here**, so it can be unit-tested in `tests/`.
-- `src/data/`: tunable numbers and game data (`vehicles.ts`: stats, part slots, parts, car models).
-- `src/art/`: placeholder pixel art generated in code (`PixelGrid`, `carArt.ts` with its palette). No Phaser imports here either. `src/scenes/textures.ts` turns grids into textures.
-- `src/scenes/`: Phaser scenes. `UIScene` is the always-on top bar and tab bar. Each tab is its own scene, drawn only in the content area (its camera viewport) using local coordinates. `GarageScene` is the Garage tab and `CarView` draws a car. `PlaceholderTabScene` stands in for tabs not built yet (wired up in `TAB_SCENES` in `src/main.ts`).
+- `src/data/`: tunable numbers and game data (`vehicles.ts`: stats, part slots, parts, car models; `economy.ts`: idle income and offline earnings).
+- `src/core/idle.ts`: idle income and offline earnings formulas. `GameModel` applies them on each tick and on time away (pending offline earnings are collected through `collectOffline()`).
+- `src/art/`: placeholder pixel art generated in code (`PixelGrid`, `carArt.ts` and `landscape.ts`, each with its palette). No Phaser imports here either. `src/scenes/textures.ts` turns grids into textures.
+- `src/scenes/`: Phaser scenes. `UIScene` is the always-on top bar and tab bar. Each tab is its own scene, drawn only in the content area (its camera viewport) using local coordinates. `GarageScene` is the Garage tab, `DriveView` is its scrolling idle-driving view, and `CarView` draws a car. `UIScene` shows the "Welcome back" offline-earnings dialog. Use `openDialog` (`src/scenes/dialog.ts`) for pop-up panels. `PlaceholderTabScene` stands in for tabs not built yet (wired up in `TAB_SCENES` in `src/main.ts`).
 - Rendering uses Phaser 4's `smoothPixelArt`: draw pixel art small and scale it up by whole numbers.
 - `src/ui/`: layout, theme colours, tab list and placeholder icons.
 - Screen units: 1080 wide, with variable height (see `src/ui/layout.ts`). Tab screens must fit 1280 units of content height.

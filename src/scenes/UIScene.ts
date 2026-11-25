@@ -1,10 +1,14 @@
 import Phaser from 'phaser';
-import { formatDuration, formatNumber } from '../core/format';
-import type { Resources } from '../core/state';
+import { formatDistance, formatDuration, formatNumber, formatPrecise } from '../core/format';
+import type { PendingOffline, Resources } from '../core/state';
+import { getActiveCar } from '../core/vehicle';
+import { ECONOMY } from '../data/economy';
+import { CAR_MODELS } from '../data/vehicles';
 import { drawResourceIcon, drawTabIcon } from '../ui/icons';
 import { TABS, type TabDef } from '../ui/tabs';
 import { COLORS, FONT_FAMILY, TEXT_COLORS } from '../ui/theme';
 import type { AppContext } from './context';
+import { cssColor, openDialog } from './dialog';
 
 const RESOURCE_DISPLAY: readonly { id: keyof Resources; label: string }[] = [
   { id: 'money', label: 'Money' },
@@ -37,6 +41,7 @@ export class UIScene extends Phaser.Scene {
   private readonly tabButtons: TabButton[] = [];
   private readonly resourceTexts: { id: keyof Resources; text: Phaser.GameObjects.Text }[] = [];
   private debugText: Phaser.GameObjects.Text | null = null;
+  private welcomeDialog: Phaser.GameObjects.Container | null = null;
 
   constructor(private readonly ctx: AppContext) {
     super({ key: 'UI', active: true });
@@ -49,12 +54,64 @@ export class UIScene extends Phaser.Scene {
 
     // Desktop shortcut: number keys 1–4 switch tabs.
     this.input.keyboard?.on('keydown', (event: KeyboardEvent) => {
+      if (this.welcomeDialog) {
+        if (event.key === 'Enter') this.collectOffline();
+        return;
+      }
       const tab = TABS[Number(event.key) - 1];
       if (tab) this.showTab(tab);
     });
 
     const firstTab = TABS[0];
     if (firstTab) this.showTab(firstTab);
+
+    // Offline earnings: waiting from before this session, or arriving after the game resumes.
+    const { model } = this.ctx;
+    if (model.state.pendingOffline.money > 0) this.showWelcomeBack(model.state.pendingOffline);
+    model.events.on('offlineEarnings', (pending) => this.showWelcomeBack(pending));
+  }
+
+  /** "Welcome back" summary of what the car earned while the player was away. */
+  private showWelcomeBack(pending: PendingOffline): void {
+    this.welcomeDialog?.destroy();
+    const { width, height } = this.ctx.layout;
+    const car = getActiveCar(this.ctx.model.state.garage);
+    const carName = CAR_MODELS[car.modelId]?.name ?? 'car';
+    const capHours = ECONOMY.offline.capHours;
+    const away = pending.capped ? `over ${capHours}h` : formatDuration(pending.seconds);
+
+    this.welcomeDialog = openDialog(this, {
+      area: { x: 0, y: 0, width, height },
+      align: 'center',
+      lines: [
+        { text: 'WELCOME BACK', size: 28, color: TEXT_COLORS.accent, bold: true, gapAfter: 16 },
+        { text: `You were away for ${away}`, size: 44, color: TEXT_COLORS.primary, bold: true, gapAfter: 24 },
+        {
+          text: `Your ${carName} drove ${formatDistance(pending.distanceKm)} and earned`,
+          size: 30,
+          color: TEXT_COLORS.secondary,
+          gapAfter: 8,
+        },
+        { text: `+${formatPrecise(pending.money)}`, size: 88, color: cssColor(COLORS.money), bold: true, gapAfter: 20 },
+        {
+          text: `Earnings build up for up to ${capHours} hours while you're away.`,
+          size: 26,
+          // Highlighted when the cap was reached, so the player knows they missed some.
+          color: pending.capped ? TEXT_COLORS.accent : TEXT_COLORS.muted,
+          gapAfter: 8,
+        },
+      ],
+      buttonLabel: 'Collect',
+      onButton: () => this.collectOffline(),
+    });
+  }
+
+  private collectOffline(): void {
+    this.ctx.model.collectOffline();
+    this.welcomeDialog?.destroy();
+    this.welcomeDialog = null;
+    const money = this.resourceTexts.find((r) => r.id === 'money')?.text;
+    if (money) this.tweens.add({ targets: money, scale: 1.3, duration: 140, yoyo: true, ease: 'Quad.easeOut' });
   }
 
   update(): void {

@@ -1,9 +1,11 @@
 import Phaser from 'phaser';
+import { formatDistance, formatPrecise } from '../core/format';
 import { computeCarStats, getActiveCar, getPart, type SlotDef } from '../core/vehicle';
 import { CAR_MODELS, QUALITIES, SLOTS, STATS } from '../data/vehicles';
 import { COLORS, FONT_FAMILY, TEXT_COLORS } from '../ui/theme';
-import { CarView } from './CarView';
 import type { AppContext } from './context';
+import { cssColor, openDialog, type DialogLine } from './dialog';
+import { DriveView } from './DriveView';
 
 const PAD = 32;
 const SECTION_GAP = 24;
@@ -16,6 +18,8 @@ const CARD_HEIGHT = 150;
 const CARD_GAP = 16;
 const PARTS_HEADER = 44;
 const PARTS_SECTION_HEIGHT = PARTS_HEADER + 2 * CARD_HEIGHT + CARD_GAP;
+/** Seconds between "+money" pop-ups over the car. */
+const POPUP_INTERVAL = 1;
 
 interface StatRow {
   fill: Phaser.GameObjects.Rectangle;
@@ -37,16 +41,27 @@ const text = (size: number, color: string, bold = false): Phaser.Types.GameObjec
   fontStyle: bold ? 'bold' : 'normal',
 });
 
+/** Text drawn over the scenery gets a dark outline so it stays readable on a bright sky. */
+const overlayText = (size: number, color: string, bold = false): Phaser.Types.GameObjects.Text.TextStyle => ({
+  ...text(size, color, bold),
+  stroke: '#0b0b14',
+  strokeThickness: Math.max(4, Math.round(size / 7)),
+});
+
 /**
- * Garage tab: shows the active car, its stats, and the part installed in each slot.
- * Tapping a part opens its details.
+ * Garage tab: the active car idle-driving at the top, then its stats and the part installed
+ * in each slot. Tapping a part opens its details.
  */
 export class GarageScene extends Phaser.Scene {
   private readonly statRows = new Map<string, StatRow>();
   private readonly partCards: PartCard[] = [];
+  private drive!: DriveView;
   private carName!: Phaser.GameObjects.Text;
   private carDescription!: Phaser.GameObjects.Text;
+  private rateText!: Phaser.GameObjects.Text;
+  private tripText!: Phaser.GameObjects.Text;
   private modal: Phaser.GameObjects.Container | null = null;
+  private popupTimer = 0;
 
   constructor(private readonly ctx: AppContext) {
     super({ key: 'GarageTab' });
@@ -71,10 +86,27 @@ export class GarageScene extends Phaser.Scene {
     this.input.keyboard?.on('keydown-ESC', () => this.closeModal());
   }
 
+  update(_time: number, deltaMs: number): void {
+    const dt = deltaMs / 1000;
+    const { model } = this.ctx;
+    const rates = model.idleRates();
+    this.drive.update(dt, rates.speedKmh);
+
+    const rate = `+${formatPrecise(rates.moneyPerSecond)}/s`;
+    if (this.rateText.text !== rate) this.rateText.setText(rate);
+    const trip = `${Math.round(rates.speedKmh)} km/h · ${formatDistance(model.state.stats.distanceKm)}`;
+    if (this.tripText.text !== trip) this.tripText.setText(trip);
+
+    this.popupTimer += dt;
+    if (this.popupTimer >= POPUP_INTERVAL) {
+      this.popupTimer = 0;
+      this.showMoneyPopup(rates.moneyPerSecond * POPUP_INTERVAL);
+    }
+  }
+
   /** Re-reads the car from the game state and updates every label and bar. */
   refresh(): void {
-    const garage = this.ctx.model.state.garage;
-    const car = getActiveCar(garage);
+    const car = getActiveCar(this.ctx.model.state.garage);
     const model = CAR_MODELS[car.modelId];
     this.carName.setText(model?.name ?? 'Unknown car');
     this.carDescription.setText(model?.description ?? '');
@@ -100,31 +132,39 @@ export class GarageScene extends Phaser.Scene {
   }
 
   private createStage(width: number, height: number): void {
-    // Back wall: corrugated panels with a neon strip.
-    this.add.rectangle(0, 0, width, height, 0x10102a).setOrigin(0);
-    for (let x = 45; x < width; x += 90) {
-      this.add.rectangle(x, 0, 4, height, 0x15153a).setOrigin(0.5, 0);
-    }
-    this.add.rectangle(width / 2, 36, width - 2 * PAD, 18, COLORS.accent, 0.12).setOrigin(0.5);
-    this.add.rectangle(width / 2, 36, width - 2 * PAD, 5, COLORS.accent, 0.9).setOrigin(0.5);
+    this.drive = new DriveView(this, width, height);
 
-    // Floor.
-    const floorY = height - 110;
-    this.add.rectangle(0, floorY, width, height - floorY, 0x181830).setOrigin(0);
-    this.add.rectangle(0, floorY, width, 3, COLORS.panelBorder).setOrigin(0);
-
-    this.carName = this.add.text(PAD, 70, '', text(56, TEXT_COLORS.primary, true));
-    this.carDescription = this.add.text(PAD, 136, '', {
-      ...text(28, TEXT_COLORS.secondary),
-      wordWrap: { width: width - 2 * PAD },
+    this.carName = this.add.text(PAD, 24, '', overlayText(52, TEXT_COLORS.primary, true));
+    this.carDescription = this.add.text(PAD, 88, '', {
+      ...overlayText(26, TEXT_COLORS.primary),
+      wordWrap: { width: width * 0.64 },
     });
+    this.rateText = this.add
+      .text(width - PAD, 24, '', overlayText(48, cssColor(COLORS.money), true))
+      .setOrigin(1, 0);
+    this.tripText = this.add
+      .text(width - PAD, 86, '', overlayText(26, TEXT_COLORS.primary))
+      .setOrigin(1, 0);
+  }
 
-    // Largest whole-number pixel scale that fits the space.
-    const groundY = height - 60;
-    const fitScale = Math.min((width - 160) / CarView.widthAt(1), (groundY - 190) / CarView.heightAt(1));
-    const scale = Phaser.Math.Clamp(Math.floor(fitScale), 5, 12);
-    const car = new CarView(this, width / 2, groundY, scale);
-    car.startIdleShudder(scale);
+  /** A "+1.07" floating up from the car and fading out. */
+  private showMoneyPopup(amount: number): void {
+    if (amount <= 0) return;
+    const { car, scale } = this.drive;
+    const x = car.x + Phaser.Math.Between(-60, 60);
+    const y = car.y - 31 * scale - 20;
+    const popup = this.add
+      .text(x, y, `+${formatPrecise(amount)}`, overlayText(36, cssColor(COLORS.money), true))
+      .setOrigin(0.5)
+      .setDepth(10);
+    this.tweens.add({
+      targets: popup,
+      y: y - 90,
+      alpha: 0,
+      duration: 1100,
+      ease: 'Cubic.easeOut',
+      onComplete: () => popup.destroy(),
+    });
   }
 
   private createStatsPanel(width: number, y: number): void {
@@ -176,7 +216,9 @@ export class GarageScene extends Phaser.Scene {
         .setInteractive({ useHandCursor: true });
       background.on('pointerup', () => this.openPartDetails(slot));
 
-      const qualityStrip = this.add.rectangle(x + 14, cardY + 24, 6, CARD_HEIGHT - 48, COLORS.panelBorder).setOrigin(0);
+      const qualityStrip = this.add
+        .rectangle(x + 14, cardY + 24, 6, CARD_HEIGHT - 48, COLORS.panelBorder)
+        .setOrigin(0);
       this.add.text(x + 32, cardY + 20, slot.label, text(22, TEXT_COLORS.secondary));
       const name = this.add.text(x + 32, cardY + 54, '', {
         ...text(26, TEXT_COLORS.primary, true),
@@ -188,90 +230,47 @@ export class GarageScene extends Phaser.Scene {
 
   private openPartDetails(slot: SlotDef): void {
     this.closeModal();
-    const { width, height } = this.cameras.main;
     const car = getActiveCar(this.ctx.model.state.garage);
     const part = getPart(car.parts[slot.id]);
 
-    const items: Phaser.GameObjects.GameObject[] = [];
-    // Dimmed backdrop: tapping it closes the details.
-    const dim = this.add.rectangle(0, 0, width, height, 0x000000, 0.65).setOrigin(0).setInteractive();
-    dim.on('pointerup', () => this.closeModal());
-    items.push(dim);
-
-    const panelWidth = width - 2 * PAD - 40;
-    const panelX = (width - panelWidth) / 2;
-    const left = panelX + 48;
-    const textWidth = panelWidth - 96;
-
-    const lines: Phaser.GameObjects.GameObject[] = [];
-    let y = 0;
-    const addLine = (obj: Phaser.GameObjects.Text, spacingAfter: number) => {
-      obj.setPosition(left, y);
-      lines.push(obj);
-      y += obj.height + spacingAfter;
-    };
-
-    addLine(this.add.text(0, 0, slot.label.toUpperCase(), text(26, TEXT_COLORS.accent, true)), 10);
-    addLine(this.add.text(0, 0, part?.name ?? 'Empty slot', text(52, TEXT_COLORS.primary, true)), 12);
+    const lines: DialogLine[] = [
+      { text: slot.label.toUpperCase(), size: 26, color: TEXT_COLORS.accent, bold: true, gapAfter: 10 },
+      { text: part?.name ?? 'Empty slot', size: 52, color: TEXT_COLORS.primary, bold: true },
+    ];
     if (part) {
       const quality = QUALITIES[part.quality];
-      const tag = this.add.text(0, 0, quality.label, text(28, '#ffffff', true));
-      tag.setColor(`#${quality.color.toString(16).padStart(6, '0')}`);
-      addLine(tag, 20);
+      lines.push({ text: quality.label, size: 28, color: cssColor(quality.color), bold: true, gapAfter: 20 });
     }
-    addLine(
-      this.add.text(0, 0, part?.description ?? `No ${slot.label.toLowerCase()} fitted yet.`, {
-        ...text(30, TEXT_COLORS.secondary),
-        wordWrap: { width: textWidth },
-      }),
-      32,
+    lines.push(
+      {
+        text: part?.description ?? `No ${slot.label.toLowerCase()} fitted yet.`,
+        size: 30,
+        color: TEXT_COLORS.secondary,
+        gapAfter: 32,
+      },
+      { text: 'ADDS TO YOUR CAR', size: 24, color: TEXT_COLORS.muted, bold: true },
     );
-
-    addLine(this.add.text(0, 0, 'ADDS TO YOUR CAR', text(24, TEXT_COLORS.muted, true)), 12);
     const bonuses = STATS.filter((stat) => (part?.stats[stat.id] ?? 0) !== 0);
-    if (bonuses.length === 0) {
-      addLine(this.add.text(0, 0, 'Nothing yet', text(32, TEXT_COLORS.primary)), 12);
-    }
+    if (bonuses.length === 0) lines.push({ text: 'Nothing yet', size: 32, color: TEXT_COLORS.primary });
     for (const stat of bonuses) {
       const amount = part?.stats[stat.id] ?? 0;
-      const label = `+${amount}${stat.unit ? ` ${stat.unit}` : ''}  ${stat.label}`;
-      addLine(this.add.text(0, 0, label, text(32, TEXT_COLORS.primary)), 10);
+      lines.push({
+        text: `+${amount}${stat.unit ? ` ${stat.unit}` : ''}  ${stat.label}`,
+        size: 32,
+        color: TEXT_COLORS.primary,
+        gapAfter: 10,
+      });
     }
-    y += 24;
-    addLine(this.add.text(0, 0, 'Part upgrades are coming soon.', text(26, TEXT_COLORS.muted)), 32);
+    lines.push({ text: 'Part upgrades are coming soon.', size: 26, color: TEXT_COLORS.muted, gapAfter: 0 });
 
-    const buttonHeight = 96;
-    const panelHeight = y + buttonHeight + 48 + 48;
-    const panelY = Math.max(PAD, (height - panelHeight) / 2);
-
-    const panel = this.add
-      .rectangle(panelX, panelY, panelWidth, panelHeight, COLORS.panel)
-      .setOrigin(0)
-      .setRounded(28)
-      .setStrokeStyle(3, COLORS.panelBorder)
-      .setInteractive(); // Swallows taps so they don't reach the backdrop.
-    items.push(panel);
-
-    for (const line of lines) {
-      const t = line as Phaser.GameObjects.Text;
-      t.y += panelY + 48;
-      items.push(t);
-    }
-
-    const buttonY = panelY + panelHeight - 48 - buttonHeight;
-    const button = this.add
-      .rectangle(width / 2, buttonY, panelWidth - 96, buttonHeight, COLORS.panelRaised)
-      .setOrigin(0.5, 0)
-      .setRounded(24)
-      .setStrokeStyle(3, COLORS.accent)
-      .setInteractive({ useHandCursor: true });
-    button.on('pointerup', () => this.closeModal());
-    const buttonLabel = this.add
-      .text(width / 2, buttonY + buttonHeight / 2, 'Close', text(34, TEXT_COLORS.primary, true))
-      .setOrigin(0.5);
-    items.push(button, buttonLabel);
-
-    this.modal = this.add.container(0, 0, items).setDepth(1000);
+    const { width, height } = this.cameras.main;
+    this.modal = openDialog(this, {
+      area: { x: 0, y: 0, width, height },
+      lines,
+      buttonLabel: 'Close',
+      onButton: () => this.closeModal(),
+      onBackdrop: () => this.closeModal(),
+    });
   }
 
   private closeModal(): void {

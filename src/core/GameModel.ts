@@ -1,8 +1,11 @@
 import { GAME_CONFIG } from '../data/gameConfig';
 import { FixedStepClock } from './clock';
 import { Emitter } from './events';
+import { ECONOMY } from '../data/economy';
+import { computeIdleRates, computeOfflineEarnings, type IdleRates } from './idle';
 import type { SaveManager } from './save';
-import type { GameState } from './state';
+import type { GameState, PendingOffline } from './state';
+import { computeCarStats, getActiveCar } from './vehicle';
 
 export type GameEvents = {
   /** One fixed simulation step has run. */
@@ -11,6 +14,10 @@ export type GameEvents = {
   saved: [savedAt: number];
   /** The game came back after being hidden (tab switched, phone locked). */
   resumed: [awaySeconds: number];
+  /** Offline earnings are waiting to be collected (sent with the new totals). */
+  offlineEarnings: [pending: PendingOffline];
+  /** The player collected offline earnings. */
+  offlineCollected: [money: number];
 };
 
 /**
@@ -42,6 +49,25 @@ export class GameModel {
   ) {
     this.lastAwaySeconds = awaySeconds;
     state.stats.sessions += 1;
+    this.applyTimeAway(awaySeconds);
+  }
+
+  /** Current idle earnings of the active car. */
+  idleRates(): IdleRates {
+    return computeIdleRates(computeCarStats(getActiveCar(this.state.garage)));
+  }
+
+  /** Adds waiting offline earnings to the player's resources. Returns the money collected. */
+  collectOffline(): number {
+    const pending = this.state.pendingOffline;
+    const money = pending.money;
+    if (money <= 0 && pending.distanceKm <= 0) return 0;
+    this.state.resources.money += money;
+    this.state.stats.distanceKm += pending.distanceKm;
+    this.state.pendingOffline = { money: 0, distanceKm: 0, seconds: 0, capped: false };
+    this.save();
+    this.events.emit('offlineCollected', money);
+    return money;
   }
 
   /** Advances the game by real elapsed time, running whole fixed ticks and autosaving. */
@@ -82,6 +108,7 @@ export class GameModel {
     this.clock.reset();
     this.lastAwaySeconds = awaySeconds;
     this.events.emit('resumed', awaySeconds);
+    this.applyTimeAway(awaySeconds);
   }
 
   /**
@@ -94,7 +121,31 @@ export class GameModel {
   }
 
   private tick(dtSeconds: number): void {
+    const rates = this.idleRates();
+    this.state.resources.money += rates.moneyPerSecond * dtSeconds;
+    this.state.stats.distanceKm += rates.kmPerSecond * dtSeconds;
     this.state.stats.playTimeSeconds += dtSeconds;
     this.events.emit('tick', dtSeconds);
+  }
+
+  /**
+   * Credits time spent away. Short absences are added straight away; longer ones are held
+   * as pending earnings for the player to collect.
+   */
+  private applyTimeAway(awaySeconds: number): void {
+    const earned = computeOfflineEarnings(this.idleRates(), awaySeconds);
+    if (earned.seconds <= 0) return;
+    if (awaySeconds < ECONOMY.offline.minSecondsForSummary) {
+      this.state.resources.money += earned.money;
+      this.state.stats.distanceKm += earned.distanceKm;
+      return;
+    }
+    const pending = this.state.pendingOffline;
+    pending.money += earned.money;
+    pending.distanceKm += earned.distanceKm;
+    pending.seconds += earned.seconds;
+    pending.capped = pending.capped || earned.capped;
+    this.save();
+    this.events.emit('offlineEarnings', { ...pending });
   }
 }
