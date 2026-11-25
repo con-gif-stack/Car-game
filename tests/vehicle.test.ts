@@ -1,8 +1,25 @@
 import { describe, expect, it } from 'vitest';
-import { computeCarStats, createStarterGarage, getActiveCar, repairGarage } from '../src/core/vehicle';
-import { CAR_MODELS, PARTS, SLOTS, STARTER_MODEL_ID, STATS } from '../src/data/vehicles';
 import { parseSave } from '../src/core/save';
 import { createNewState } from '../src/core/state';
+import {
+  computeCarStats,
+  createStarterGarage,
+  getActiveCar,
+  getInstalledPart,
+  levelMultiplier,
+  repairGarage,
+} from '../src/core/vehicle';
+import { PART_LEVELS } from '../src/data/economy';
+import {
+  CAR_MODELS,
+  PARTS,
+  QUALITIES,
+  SLOTS,
+  STARTER_MODEL_ID,
+  STATS,
+  TIER_ORDER,
+  TIER_STAT_MULTIPLIERS,
+} from '../src/data/vehicles';
 
 describe('vehicle data', () => {
   it('starter parts exist and fit the slot they are in', () => {
@@ -22,6 +39,22 @@ describe('vehicle data', () => {
       for (const key of Object.keys(part.stats)) expect(statIds.has(key as never), `${part.id}.${key}`).toBe(true);
     }
   });
+
+  it('every slot has a part at every tier above Worn', () => {
+    for (const slot of SLOTS) {
+      for (const quality of TIER_ORDER.slice(1)) expect(PARTS[`${slot.id}-${quality}`], `${slot.id}-${quality}`).toBeDefined();
+    }
+  });
+
+  it('a new tier always beats the previous tier at max level', () => {
+    const maxed = levelMultiplier(PART_LEVELS.maxLevel);
+    for (let i = 1; i < TIER_ORDER.length; i++) {
+      const prev = TIER_ORDER[i - 1] as keyof typeof TIER_STAT_MULTIPLIERS;
+      const next = TIER_ORDER[i] as keyof typeof TIER_STAT_MULTIPLIERS;
+      expect(TIER_STAT_MULTIPLIERS[next]).toBeGreaterThan(TIER_STAT_MULTIPLIERS[prev] * maxed);
+      expect(QUALITIES[next].rank).toBe(i);
+    }
+  });
 });
 
 describe('computeCarStats', () => {
@@ -31,6 +64,13 @@ describe('computeCarStats', () => {
     // Rustbucket: engine 52 + transmission 3 + exhaust 3.
     expect(stats.power).toBe(58);
     expect(stats.durability).toBe(10 + 4 + 3 + 4);
+  });
+
+  it('part levels add a share of the part stats', () => {
+    const car = getActiveCar(createStarterGarage());
+    const before = computeCarStats(car).power;
+    (car.parts.engine as { level: number }).level = 3;
+    expect(computeCarStats(car).power).toBeCloseTo(before + 52 * PART_LEVELS.bonusPerLevel * 2);
   });
 
   it('a removed part no longer counts', () => {
@@ -55,23 +95,30 @@ describe('repairGarage', () => {
     }
   });
 
-  it('replaces unknown or wrong-slot parts with the stock part, and keeps empty slots', () => {
+  it('replaces unknown or wrong-slot parts with the stock part, keeps empty slots, and clamps levels', () => {
     const garage = repairGarage({
       cars: [
         {
           id: 'car-1',
           modelId: STARTER_MODEL_ID,
-          parts: { engine: 'no-such-part', tires: 'worn-engine', turbo: null, brakes: 'squeaky-brakes' },
+          parts: {
+            engine: { partId: 'no-such-part', level: 1 },
+            tires: { partId: 'engine-used', level: 1 },
+            turbo: null,
+            brakes: { partId: 'brakes-street', level: 99 },
+            exhaust: 'not-an-object',
+          },
         },
       ],
       activeCarId: 'car-1',
     });
     const car = getActiveCar(garage);
-    expect(car.parts.engine).toBe('worn-engine');
-    expect(car.parts.tires).toBe('bald-tires');
+    expect(car.parts.engine).toEqual({ partId: 'engine-worn', level: 1 });
+    expect(car.parts.tires).toEqual({ partId: 'tires-worn', level: 1 });
     expect(car.parts.turbo).toBeNull();
-    expect(car.parts.brakes).toBe('squeaky-brakes');
-    expect(car.parts.fuelSystem).toBe('leaky-fuel-pump');
+    expect(car.parts.brakes).toEqual({ partId: 'brakes-street', level: PART_LEVELS.maxLevel });
+    expect(car.parts.exhaust).toEqual({ partId: 'exhaust-worn', level: 1 });
+    expect(getInstalledPart(car, 'fuelSystem')?.id).toBe('fuelSystem-worn');
   });
 
   it('fixes an active car id that does not exist, and drops duplicate cars', () => {

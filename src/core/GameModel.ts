@@ -4,7 +4,7 @@ import { Emitter } from './events';
 import { ECONOMY } from '../data/economy';
 import { computeIdleRates, computeOfflineEarnings, type IdleRates } from './idle';
 import type { SaveManager } from './save';
-import type { GameState, PendingOffline } from './state';
+import { emptyPendingOffline, type GameState, type PendingOffline } from './state';
 import { computeCarStats, getActiveCar } from './vehicle';
 
 export type GameEvents = {
@@ -54,20 +54,35 @@ export class GameModel {
 
   /** Current idle earnings of the active car. */
   idleRates(): IdleRates {
-    return computeIdleRates(computeCarStats(getActiveCar(this.state.garage)));
+    return computeIdleRates(
+      computeCarStats(getActiveCar(this.state.garage)),
+      this.state.workshop.salvageMagnetLevel,
+    );
   }
 
   /** Adds waiting offline earnings to the player's resources. Returns the money collected. */
   collectOffline(): number {
     const pending = this.state.pendingOffline;
     const money = pending.money;
-    if (money <= 0 && pending.distanceKm <= 0) return 0;
-    this.state.resources.money += money;
-    this.state.stats.distanceKm += pending.distanceKm;
-    this.state.pendingOffline = { money: 0, distanceKm: 0, seconds: 0, capped: false };
+    if (pending.seconds <= 0) return 0;
+    this.addEarnings(pending);
+    this.state.pendingOffline = emptyPendingOffline();
     this.save();
     this.events.emit('offlineCollected', money);
     return money;
+  }
+
+  private addEarnings(earned: {
+    money: number;
+    materials: number;
+    rareMaterials: number;
+    distanceKm: number;
+  }): void {
+    const { resources, stats } = this.state;
+    resources.money += earned.money;
+    resources.materials += earned.materials;
+    resources.rareMaterials += earned.rareMaterials;
+    stats.distanceKm += earned.distanceKm;
   }
 
   /** Advances the game by real elapsed time, running whole fixed ticks and autosaving. */
@@ -122,8 +137,12 @@ export class GameModel {
 
   private tick(dtSeconds: number): void {
     const rates = this.idleRates();
-    this.state.resources.money += rates.moneyPerSecond * dtSeconds;
-    this.state.stats.distanceKm += rates.kmPerSecond * dtSeconds;
+    this.addEarnings({
+      money: rates.moneyPerSecond * dtSeconds,
+      materials: rates.materialsPerSecond * dtSeconds,
+      rareMaterials: rates.rareMaterialsPerSecond * dtSeconds,
+      distanceKm: rates.kmPerSecond * dtSeconds,
+    });
     this.state.stats.playTimeSeconds += dtSeconds;
     this.events.emit('tick', dtSeconds);
   }
@@ -136,12 +155,13 @@ export class GameModel {
     const earned = computeOfflineEarnings(this.idleRates(), awaySeconds);
     if (earned.seconds <= 0) return;
     if (awaySeconds < ECONOMY.offline.minSecondsForSummary) {
-      this.state.resources.money += earned.money;
-      this.state.stats.distanceKm += earned.distanceKm;
+      this.addEarnings(earned);
       return;
     }
     const pending = this.state.pendingOffline;
     pending.money += earned.money;
+    pending.materials += earned.materials;
+    pending.rareMaterials += earned.rareMaterials;
     pending.distanceKm += earned.distanceKm;
     pending.seconds += earned.seconds;
     pending.capped = pending.capped || earned.capped;

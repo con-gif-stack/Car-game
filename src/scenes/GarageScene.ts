@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import { formatDistance, formatPrecise } from '../core/format';
-import { computeCarStats, getActiveCar, getPart, type SlotDef } from '../core/vehicle';
+import { computeCarStats, getActiveCar, getInstalledPart, partStatsAtLevel, type SlotDef } from '../core/vehicle';
 import { CAR_MODELS, QUALITIES, SLOTS, STATS } from '../data/vehicles';
 import { COLORS, FONT_FAMILY, TEXT_COLORS } from '../ui/theme';
 import type { AppContext } from './context';
@@ -60,6 +60,11 @@ export class GarageScene extends Phaser.Scene {
   private carDescription!: Phaser.GameObjects.Text;
   private rateText!: Phaser.GameObjects.Text;
   private tripText!: Phaser.GameObjects.Text;
+  private materialsRateText!: Phaser.GameObjects.Text;
+  private rareRateText!: Phaser.GameObjects.Text;
+  /** Whole materials / rare materials last seen, to pop up "+1" when another one arrives. */
+  private lastWholeMaterials = 0;
+  private lastWholeRare = 0;
   private modal: Phaser.GameObjects.Container | null = null;
   private popupTimer = 0;
 
@@ -81,6 +86,8 @@ export class GarageScene extends Phaser.Scene {
     this.createStatsPanel(width, statsY);
     this.createPartsGrid(width, partsY);
     this.refresh();
+    this.lastWholeMaterials = Math.floor(this.ctx.model.state.resources.materials);
+    this.lastWholeRare = Math.floor(this.ctx.model.state.resources.rareMaterials);
 
     this.events.on(Phaser.Scenes.Events.WAKE, () => this.refresh());
     this.input.keyboard?.on('keydown-ESC', () => this.closeModal());
@@ -96,6 +103,21 @@ export class GarageScene extends Phaser.Scene {
     if (this.rateText.text !== rate) this.rateText.setText(rate);
     const trip = `${Math.round(rates.speedKmh)} km/h · ${formatDistance(model.state.stats.distanceKm)}`;
     if (this.tripText.text !== trip) this.tripText.setText(trip);
+    const materialsRate = `+${formatPrecise(rates.materialsPerSecond * 3600)} materials/h`;
+    if (this.materialsRateText.text !== materialsRate) this.materialsRateText.setText(materialsRate);
+    const rareRate = `+${formatPrecise(rates.rareMaterialsPerSecond * 3600)} rare/h`;
+    if (this.rareRateText.text !== rareRate) this.rareRateText.setText(rareRate);
+
+    // A pop-up whenever another whole material or rare material is found.
+    const { materials, rareMaterials } = model.state.resources;
+    if (Math.floor(materials) > this.lastWholeMaterials) {
+      this.showPopup(`+${Math.floor(materials) - this.lastWholeMaterials} materials`, COLORS.materials);
+    }
+    if (Math.floor(rareMaterials) > this.lastWholeRare) {
+      this.showPopup(`+${Math.floor(rareMaterials) - this.lastWholeRare} rare!`, COLORS.rareMaterials);
+    }
+    this.lastWholeMaterials = Math.floor(materials);
+    this.lastWholeRare = Math.floor(rareMaterials);
 
     this.popupTimer += dt;
     if (this.popupTimer >= POPUP_INTERVAL) {
@@ -122,7 +144,7 @@ export class GarageScene extends Phaser.Scene {
     }
 
     for (const card of this.partCards) {
-      const part = getPart(car.parts[card.slot.id]);
+      const part = getInstalledPart(car, card.slot.id);
       card.name.setText(part ? part.name : 'Empty');
       card.name.setColor(part ? TEXT_COLORS.primary : TEXT_COLORS.muted);
       card.background.setFillStyle(part ? COLORS.panelRaised : COLORS.panel);
@@ -142,6 +164,12 @@ export class GarageScene extends Phaser.Scene {
     this.rateText = this.add
       .text(width - PAD, 24, '', overlayText(48, cssColor(COLORS.money), true))
       .setOrigin(1, 0);
+    this.materialsRateText = this.add
+      .text(PAD, 132, '', overlayText(26, cssColor(COLORS.materials), true))
+      .setOrigin(0, 0);
+    this.rareRateText = this.add
+      .text(PAD, 168, '', overlayText(26, cssColor(COLORS.rareMaterials), true))
+      .setOrigin(0, 0);
     this.tripText = this.add
       .text(width - PAD, 86, '', overlayText(26, TEXT_COLORS.primary))
       .setOrigin(1, 0);
@@ -150,11 +178,16 @@ export class GarageScene extends Phaser.Scene {
   /** A "+1.07" floating up from the car and fading out. */
   private showMoneyPopup(amount: number): void {
     if (amount <= 0) return;
+    this.showPopup(`+${formatPrecise(amount)}`, COLORS.money);
+  }
+
+  /** Text that floats up from the car and fades out. */
+  private showPopup(label: string, color: number): void {
     const { car, scale } = this.drive;
     const x = car.x + Phaser.Math.Between(-60, 60);
     const y = car.y - 31 * scale - 20;
     const popup = this.add
-      .text(x, y, `+${formatPrecise(amount)}`, overlayText(36, cssColor(COLORS.money), true))
+      .text(x, y, label, overlayText(36, cssColor(color), true))
       .setOrigin(0.5)
       .setDepth(10);
     this.tweens.add({
@@ -231,7 +264,9 @@ export class GarageScene extends Phaser.Scene {
   private openPartDetails(slot: SlotDef): void {
     this.closeModal();
     const car = getActiveCar(this.ctx.model.state.garage);
-    const part = getPart(car.parts[slot.id]);
+    const part = getInstalledPart(car, slot.id);
+    const level = car.parts[slot.id]?.level ?? 1;
+    const partStats = part ? partStatsAtLevel(part, level) : {};
 
     const lines: DialogLine[] = [
       { text: slot.label.toUpperCase(), size: 26, color: TEXT_COLORS.accent, bold: true, gapAfter: 10 },
@@ -250,10 +285,10 @@ export class GarageScene extends Phaser.Scene {
       },
       { text: 'ADDS TO YOUR CAR', size: 24, color: TEXT_COLORS.muted, bold: true },
     );
-    const bonuses = STATS.filter((stat) => (part?.stats[stat.id] ?? 0) !== 0);
+    const bonuses = STATS.filter((stat) => (partStats[stat.id] ?? 0) !== 0);
     if (bonuses.length === 0) lines.push({ text: 'Nothing yet', size: 32, color: TEXT_COLORS.primary });
     for (const stat of bonuses) {
-      const amount = part?.stats[stat.id] ?? 0;
+      const amount = Math.round(partStats[stat.id] ?? 0);
       lines.push({
         text: `+${amount}${stat.unit ? ` ${stat.unit}` : ''}  ${stat.label}`,
         size: 32,

@@ -92,7 +92,21 @@ export class UIScene extends Phaser.Scene {
           color: TEXT_COLORS.secondary,
           gapAfter: 8,
         },
-        { text: `+${formatPrecise(pending.money)}`, size: 88, color: cssColor(COLORS.money), bold: true, gapAfter: 20 },
+        { text: `+${formatPrecise(pending.money)}`, size: 88, color: cssColor(COLORS.money), bold: true, gapAfter: 4 },
+        {
+          text: `+${formatPrecise(pending.materials)} materials`,
+          size: 36,
+          color: cssColor(COLORS.materials),
+          bold: true,
+          gapAfter: 4,
+        },
+        {
+          text: `+${formatPrecise(pending.rareMaterials)} rare`,
+          size: 36,
+          color: cssColor(COLORS.rareMaterials),
+          bold: true,
+          gapAfter: 20,
+        },
         {
           text: `Earnings build up for up to ${capHours} hours while you're away.`,
           size: 26,
@@ -117,7 +131,8 @@ export class UIScene extends Phaser.Scene {
   update(): void {
     const { resources } = this.ctx.model.state;
     for (const { id, text } of this.resourceTexts) {
-      const value = formatNumber(resources[id]);
+      // Money grows fast, so whole numbers; materials come in slowly, so keep decimals early on.
+      const value = id === 'money' ? formatNumber(resources[id]) : formatPrecise(resources[id]);
       if (text.text !== value) text.setText(value);
     }
     this.updateDebugOverlay();

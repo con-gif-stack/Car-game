@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { formatDistance, formatPrecise } from '../src/core/format';
-import { computeIdleRates, computeOfflineEarnings } from '../src/core/idle';
+import { computeIdleRates, computeOfflineEarnings, rareTricklePerHour } from '../src/core/idle';
 import { computeCarStats, createStarterGarage, emptyStats, getActiveCar } from '../src/core/vehicle';
 import { ECONOMY } from '../src/data/economy';
 
@@ -14,11 +14,37 @@ describe('computeIdleRates', () => {
     expect(rates.moneyPerSecond).toBeLessThan(1.1);
   });
 
-  it('more power means more speed and more money', () => {
-    const weak = computeIdleRates({ ...emptyStats(), power: 50 });
-    const strong = computeIdleRates({ ...emptyStats(), power: 150 });
+  it('more power means more speed, money and materials', () => {
+    const base = { ...emptyStats(), efficiency: 20, grip: 16 };
+    const weak = computeIdleRates({ ...base, power: 50 });
+    const strong = computeIdleRates({ ...base, power: 150 });
     expect(strong.speedKmh).toBeGreaterThan(weak.speedKmh);
     expect(strong.moneyPerSecond).toBeGreaterThan(weak.moneyPerSecond);
+    expect(strong.materialsPerSecond).toBeGreaterThan(weak.materialsPerSecond);
+  });
+
+  it('fuel efficiency scales money and grip scales materials', () => {
+    const base = { ...emptyStats(), power: 58, efficiency: 20, grip: 16 };
+    const normal = computeIdleRates(base);
+    const efficient = computeIdleRates({ ...base, efficiency: 40 });
+    const grippy = computeIdleRates({ ...base, grip: 32 });
+    expect(efficient.moneyPerSecond).toBeCloseTo(normal.moneyPerSecond * 2);
+    expect(efficient.materialsPerSecond).toBeCloseTo(normal.materialsPerSecond);
+    expect(grippy.materialsPerSecond).toBeCloseTo(normal.materialsPerSecond * 2);
+  });
+
+  it('the starter car salvages about 20 materials an hour', () => {
+    const perHour = starterRates().materialsPerSecond * 3600;
+    expect(perHour).toBeGreaterThan(18);
+    expect(perHour).toBeLessThan(22);
+  });
+
+  it('rare materials only trickle in, faster with each Salvage Magnet level, up to its max', () => {
+    expect(rareTricklePerHour(0)).toBe(ECONOMY.rareTrickle.basePerHour);
+    expect(rareTricklePerHour(2)).toBeGreaterThan(rareTricklePerHour(1));
+    expect(rareTricklePerHour(999)).toBe(rareTricklePerHour(ECONOMY.rareTrickle.maxLevel));
+    // "Very small": under one rare material an hour even at max level.
+    expect(rareTricklePerHour(ECONOMY.rareTrickle.maxLevel)).toBeLessThan(1);
   });
 });
 
@@ -29,6 +55,8 @@ describe('computeOfflineEarnings', () => {
     expect(earned.seconds).toBe(3600);
     expect(earned.money).toBeCloseTo(rates.moneyPerSecond * 3600 * ECONOMY.offline.efficiency);
     expect(earned.distanceKm).toBeCloseTo(rates.kmPerSecond * 3600 * ECONOMY.offline.efficiency);
+    expect(earned.materials).toBeCloseTo(rates.materialsPerSecond * 3600 * ECONOMY.offline.efficiency);
+    expect(earned.rareMaterials).toBeCloseTo(rates.rareMaterialsPerSecond * 3600 * ECONOMY.offline.efficiency);
     expect(earned.capped).toBe(false);
   });
 

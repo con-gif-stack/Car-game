@@ -1,3 +1,4 @@
+import { PART_LEVELS } from '../data/economy';
 import { CAR_MODELS, PARTS, SLOTS, STARTER_MODEL_ID, STATS } from '../data/vehicles';
 
 export type StatId = 'power' | 'grip' | 'handling' | 'efficiency' | 'durability';
@@ -10,7 +11,8 @@ export type SlotId =
   | 'exhaust'
   | 'turbo'
   | 'fuelSystem';
-export type QualityId = 'worn';
+/** Part tiers, lowest first. */
+export type QualityId = 'worn' | 'used' | 'street' | 'sport' | 'race';
 
 export type StatBlock = Record<StatId, number>;
 
@@ -32,6 +34,8 @@ export interface QualityDef {
   id: QualityId;
   label: string;
   color: number;
+  /** Position in the tier ladder: 0 = worn. */
+  rank: number;
 }
 
 export interface PartDef {
@@ -40,7 +44,7 @@ export interface PartDef {
   name: string;
   description: string;
   quality: QualityId;
-  /** What the part adds to the car's stats. */
+  /** What the part adds to the car's stats at level 1. */
   stats: Partial<StatBlock>;
 }
 
@@ -50,16 +54,23 @@ export interface CarModelDef {
   description: string;
   /** Stats from the car's body and chassis, before any parts. */
   baseStats: Partial<StatBlock>;
-  /** Parts fitted when the car is first obtained (null = empty slot). */
+  /** Part ids fitted (at level 1) when the car is first obtained; null = empty slot. */
   starterParts: Record<SlotId, string | null>;
+}
+
+/** A part fitted to a car. */
+export interface InstalledPart {
+  partId: string;
+  /** 1 to PART_LEVELS.maxLevel. */
+  level: number;
 }
 
 /** A car the player owns, as stored in the save. */
 export interface CarState {
   id: string;
   modelId: string;
-  /** Installed part id per slot, or null for an empty slot. */
-  parts: Record<SlotId, string | null>;
+  /** Installed part per slot, or null for an empty slot. */
+  parts: Record<SlotId, InstalledPart | null>;
 }
 
 export interface GarageState {
@@ -73,22 +84,42 @@ export function emptyStats(): StatBlock {
   return stats;
 }
 
-function addStats(into: StatBlock, add: Partial<StatBlock>): void {
-  for (const stat of STATS) into[stat.id] += add[stat.id] ?? 0;
+export function getPart(partId: string | null | undefined): PartDef | null {
+  return partId ? (PARTS[partId] ?? null) : null;
 }
 
-export function getPart(partId: string | null): PartDef | null {
-  return partId === null ? null : (PARTS[partId] ?? null);
+/** The definition of the part installed in a slot, or null if the slot is empty. */
+export function getInstalledPart(car: CarState, slot: SlotId): PartDef | null {
+  return getPart(car.parts[slot]?.partId);
 }
 
-/** The car's total stats: its base stats plus every installed part. */
+/** Multiplier on a part's stats from its level: level 1 = ×1, each level above adds a fixed share. */
+export function levelMultiplier(level: number): number {
+  return 1 + PART_LEVELS.bonusPerLevel * (Math.max(1, level) - 1);
+}
+
+/** A part's stat contribution at the given level. */
+export function partStatsAtLevel(part: PartDef, level: number): Partial<StatBlock> {
+  const multiplier = levelMultiplier(level);
+  const result: Partial<StatBlock> = {};
+  for (const stat of STATS) {
+    const base = part.stats[stat.id];
+    if (base) result[stat.id] = base * multiplier;
+  }
+  return result;
+}
+
+/** The car's total stats: its base stats plus every installed part at its level. */
 export function computeCarStats(car: CarState): StatBlock {
   const stats = emptyStats();
   const model = CAR_MODELS[car.modelId];
-  if (model) addStats(stats, model.baseStats);
+  for (const stat of STATS) stats[stat.id] += model?.baseStats[stat.id] ?? 0;
   for (const slot of SLOTS) {
-    const part = getPart(car.parts[slot.id]);
-    if (part) addStats(stats, part.stats);
+    const installed = car.parts[slot.id];
+    const part = getPart(installed?.partId);
+    if (!installed || !part) continue;
+    const add = partStatsAtLevel(part, installed.level);
+    for (const stat of STATS) stats[stat.id] += add[stat.id] ?? 0;
   }
   return stats;
 }
@@ -96,7 +127,12 @@ export function computeCarStats(car: CarState): StatBlock {
 export function createCar(id: string, modelId: string): CarState {
   const model = CAR_MODELS[modelId];
   if (!model) throw new Error(`Unknown car model: ${modelId}`);
-  return { id, modelId, parts: { ...model.starterParts } };
+  const parts = {} as Record<SlotId, InstalledPart | null>;
+  for (const slot of SLOTS) {
+    const partId = model.starterParts[slot.id];
+    parts[slot.id] = partId ? { partId, level: 1 } : null;
+  }
+  return { id, modelId, parts };
 }
 
 export function createStarterGarage(): GarageState {
@@ -113,19 +149,27 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
-/** Checks one saved car, dropping it if unusable and fixing any slot that holds an invalid part. */
+/** Checks one saved part slot: returns a valid installed part, null for empty, or undefined if invalid. */
+function repairInstalledPart(raw: unknown, slot: SlotId): InstalledPart | null | undefined {
+  if (raw === null) return null;
+  if (!isRecord(raw) || typeof raw.partId !== 'string') return undefined;
+  const part = PARTS[raw.partId];
+  if (!part || part.slot !== slot) return undefined;
+  const level = typeof raw.level === 'number' && Number.isFinite(raw.level) ? Math.floor(raw.level) : 1;
+  return { partId: part.id, level: Math.min(PART_LEVELS.maxLevel, Math.max(1, level)) };
+}
+
+/** Checks one saved car, dropping it if unusable and resetting any slot that holds an invalid part. */
 function repairCar(raw: unknown): CarState | null {
   if (!isRecord(raw) || typeof raw.id !== 'string' || typeof raw.modelId !== 'string') return null;
   const model = CAR_MODELS[raw.modelId];
   if (!model) return null;
   const savedParts = isRecord(raw.parts) ? raw.parts : {};
-  const parts = {} as Record<SlotId, string | null>;
+  const stock = createCar(raw.id, raw.modelId);
+  const parts = {} as Record<SlotId, InstalledPart | null>;
   for (const slot of SLOTS) {
-    const value = savedParts[slot.id];
-    const part = typeof value === 'string' ? PARTS[value] : undefined;
-    if (value === null) parts[slot.id] = null;
-    else if (part && part.slot === slot.id) parts[slot.id] = part.id;
-    else parts[slot.id] = model.starterParts[slot.id];
+    const repaired = repairInstalledPart(savedParts[slot.id], slot.id);
+    parts[slot.id] = repaired === undefined ? stock.parts[slot.id] : repaired;
   }
   return { id: raw.id, modelId: raw.modelId, parts };
 }

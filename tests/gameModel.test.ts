@@ -86,6 +86,8 @@ describe('GameModel', () => {
     const rates = model.idleRates();
     play(model, 5);
     expect(model.state.resources.money).toBeCloseTo(rates.moneyPerSecond * 5);
+    expect(model.state.resources.materials).toBeCloseTo(rates.materialsPerSecond * 5);
+    expect(model.state.resources.rareMaterials).toBeCloseTo(rates.rareMaterialsPerSecond * 5);
     expect(model.state.stats.distanceKm).toBeCloseTo(rates.kmPerSecond * 5);
   });
 
@@ -116,8 +118,12 @@ describe('GameModel', () => {
     // Pending earnings are saved, so closing the game before collecting loses nothing.
     expect(saves.load().state.pendingOffline.money).toBeCloseTo(expected);
 
+    const expectedMaterials = model.idleRates().materialsPerSecond * 3600 * ECONOMY.offline.efficiency;
+    expect(model.state.pendingOffline.materials).toBeCloseTo(expectedMaterials);
     expect(model.collectOffline()).toBeCloseTo(expected);
     expect(model.state.resources.money).toBeCloseTo(expected);
+    expect(model.state.resources.materials).toBeCloseTo(expectedMaterials);
+    expect(model.state.resources.rareMaterials).toBeGreaterThan(0);
     expect(model.state.pendingOffline.money).toBe(0);
     expect(model.collectOffline()).toBe(0);
   });

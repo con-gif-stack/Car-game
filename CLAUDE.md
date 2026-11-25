@@ -27,11 +27,14 @@ The full design plan, decisions, open questions and build roadmap are in
 - `npm test`: unit tests (Vitest).
 - `npm run typecheck`: TypeScript check.
 - `npm run build`: type check and production build into `dist/`.
+- `npm run simulate`: balance report (time to each part tier and milestone). Run it after changing any economy numbers; `tests/balance.test.ts` enforces the one-week rule.
 
 ## Code layout
 
 - `src/core/`: game logic and state (`GameModel`, saving, fixed-step clock, number formatting). **No Phaser imports here**, so it can be unit-tested in `tests/`.
-- `src/data/`: tunable numbers and game data (`vehicles.ts`: stats, part slots, parts, car models; `economy.ts`: idle income and offline earnings).
+- `src/data/`: tunable numbers and game data (`vehicles.ts`: stats, slots, tiers and the generated part list, car models; `economy.ts`: income, rare trickle, offline earnings, tier and level costs).
+- `src/core/upgrades.ts`: upgrade rules and costs (next tier, level-ups, Salvage Magnet, spending), shared by the game and the simulator.
+- `src/sim/simulate.ts`: balance simulator (no Phaser). `PLANNED_RUNS` in `economy.ts` stands in for driving-run rewards until Step 5.
 - `src/core/idle.ts`: idle income and offline earnings formulas. `GameModel` applies them on each tick and on time away (pending offline earnings are collected through `collectOffline()`).
 - `src/art/`: placeholder pixel art generated in code (`PixelGrid`, `carArt.ts` and `landscape.ts`, each with its palette). No Phaser imports here either. `src/scenes/textures.ts` turns grids into textures.
 - `src/scenes/`: Phaser scenes. `UIScene` is the always-on top bar and tab bar. Each tab is its own scene, drawn only in the content area (its camera viewport) using local coordinates. `GarageScene` is the Garage tab, `DriveView` is its scrolling idle-driving view, and `CarView` draws a car. `UIScene` shows the "Welcome back" offline-earnings dialog. Use `openDialog` (`src/scenes/dialog.ts`) for pop-up panels. `PlaceholderTabScene` stands in for tabs not built yet (wired up in `TAB_SCENES` in `src/main.ts`).

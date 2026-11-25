@@ -42,7 +42,32 @@ type RawSave = Record<string, unknown>;
  * Converts a save from version N to N + 1, keyed by N. Add one entry each time
  * SAVE_VERSION is bumped. Example: `1: (save) => ({ ...save, version: 2, newField: 0 })`.
  */
-const MIGRATIONS: Record<number, (save: RawSave) => RawSave> = {};
+const MIGRATIONS: Record<number, (save: RawSave) => RawSave> = {
+  // v1 → v2: parts became tiers with levels. Installed parts were stored as a part id string
+  // and are now { partId, level }; the starter part ids were renamed to "<slot>-<tier>".
+  1: (save) => {
+    const renamed: Record<string, string> = {
+      'worn-engine': 'engine-worn',
+      'worn-transmission': 'transmission-worn',
+      'bald-tires': 'tires-worn',
+      'saggy-suspension': 'suspension-worn',
+      'squeaky-brakes': 'brakes-worn',
+      'rusted-exhaust': 'exhaust-worn',
+      'leaky-fuel-pump': 'fuelSystem-worn',
+    };
+    const garage = isRecord(save.garage) ? save.garage : {};
+    const cars = Array.isArray(garage.cars) ? garage.cars : [];
+    const migratedCars = cars.map((car: unknown) => {
+      if (!isRecord(car) || !isRecord(car.parts)) return car;
+      const parts: RawSave = {};
+      for (const [slot, value] of Object.entries(car.parts)) {
+        parts[slot] = typeof value === 'string' ? { partId: renamed[value] ?? value, level: 1 } : value;
+      }
+      return { ...car, parts };
+    });
+    return { ...save, version: 2, garage: { ...garage, cars: migratedCars } };
+  },
+};
 
 function isRecord(value: unknown): value is RawSave {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
