@@ -7,6 +7,14 @@ An idle car progression game: upgrade a rusty starter car into an advanced perfo
 The full design plan, decisions, open questions and build roadmap are in
 [`docs/GAME_DESIGN.md`](docs/GAME_DESIGN.md). Read it before building anything.
 
+## Core loop (revised 2026-11-25, design doc Part 3)
+
+- **Farm** (home, top-down): tap scrap piles, then drones collect materials + money, also while away.
+- **Garage:** upgrade the car (parts: tiers + levels) and later the garage.
+- **Drive** (side view): fuel-limited runs from the Junkyard along an endless biome road; distance is how progress is checked. Runs pay money, material finds and a new-best bonus.
+- **Milestones** announce new biomes (unlocking their farms and materials) and major unlocks.
+- Tabs: Farm | Garage | Drive | Upgrades | World. Until Step 6, the car's idle driving in the Garage is a stand-in for drone income.
+
 ## How we work
 
 - **Build one roadmap step at a time.** Don't jump ahead to later steps unless the user asks.

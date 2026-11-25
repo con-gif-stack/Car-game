@@ -4,10 +4,13 @@
 >
 > - **Part 1, the original design plan:** sections 1–10, Paid Content and Core Design Philosophy. This is the designer's plan as written. Only the formatting (headings, lists) has changed, plus one marked wording fix in Paid Content.
 > - **Part 2, development notes:** the Decisions Log, Open Questions and Build Roadmap. These were added during planning and are updated as the game is built.
+> - **Part 3, core loop revision (2026-11-25):** the designer's revised core loop (farm with drones, drive runs, milestones, biomes). **Where it conflicts with Part 1, Part 3 wins.**
 
 ---
 
 # Part 1 — Original Design Plan
+
+> **Note:** the core loop was revised on 2026-11-25. See **Part 3** for what changed (idle farming now uses drones on a top-down farm screen; drive runs are fuel-limited and are how progress is checked).
 
 ## 1. Game Overview
 
@@ -409,36 +412,45 @@ Make players feel like they are constantly building something. Every upgrade sho
 | 2026-11-25 | Car stats and parts | Cars have five stats: **Power (hp), Grip, Handling, Fuel Efficiency and Durability**. A car's stats are its body's base stats plus everything its parts add. There are **eight part slots**, following section 3A: Engine, Transmission, Tires, Suspension, Brakes, Exhaust, Turbo and Fuel System. Slots can be empty; the starter car has no turbo. All numbers are placeholders until Steps 3–4. |
 | 2026-11-25 | Starter car | **"Rustbucket"**: an old, rusty hatchback (original design) with worn stock parts. It shows about 58 hp, with every stat bar under a quarter full. |
 | 2026-11-25 | Art style references | Three references were shared (see **Art Style Notes** below). Placeholder art is generated in code from a colour palette, so it can be retuned to match. |
-| 2026-11-25 | Idle income | The active car idle-drives at **20 km/h + 0.35 km/h per hp** and earns **90 money per km**, so the Rustbucket makes about **1 money per second**. Income goes straight into Money while the game is open, and total distance is tracked. *(Updated in Step 3: Fuel Efficiency and Grip now also affect income; see "Income and stats".)* Placeholder numbers live in `src/data/economy.ts`. |
+| 2026-11-25 | Idle income | The active car idle-drives at **20 km/h + 0.35 km/h per hp** and earns **90 money per km**, so the Rustbucket makes about **1 money per second**. Income goes straight into Money while the game is open, and total distance is tracked. *(Updated in Step 3: Fuel Efficiency and Grip now also affect income; see "Income and stats".)* Placeholder numbers live in `src/data/economy.ts`. *(Superseded by Part 3: drones produce idle income from Step 6; car idle-driving stays as a stand-in until then.)* |
 | 2026-11-25 | Offline earnings | Time away earns at the full idle rate, up to an **8-hour cap** (placeholder; open question 5). Absences under a minute are added silently. Longer ones show a **"Welcome back" summary with a Collect button**. Uncollected earnings are saved, and they add up if the player leaves again before collecting. |
-| 2026-11-25 | Where materials come from | **Materials** come mainly from **idle driving**. Certain **rare materials** that progression requires come mainly from **driving runs**. Idle driving gives only a **very small trickle** of them, which can be **upgraded** to grow. There may be several kinds of rare material (e.g. per biome); which ones are run-only, and how the trickle is upgraded, is settled in Steps 3–5. |
-| 2026-11-25 | Garage view | The top of the Garage tab shows the car **idle-driving along a scrolling road** in front of layered sunset scenery (sky, clouds, a snowy mountain, pine forest), styled after the first art reference. Wheels spin and "+money" pop-ups rise every second. |
+| 2026-11-25 | Where materials come from | **Materials** come mainly from **idle driving**. Certain **rare materials** that progression requires come mainly from **driving runs**. Idle driving gives only a **very small trickle** of them, which can be **upgraded** to grow. There may be several kinds of rare material (e.g. per biome); which ones are run-only, and how the trickle is upgraded, is settled in Steps 3–5. *(Updated by Part 3: materials come from the farm and drones, plus finds on drive runs; biome-specific materials need that biome unlocked through runs.)* |
+| 2026-11-25 | Garage view | The top of the Garage tab shows the car **idle-driving along a scrolling road** in front of layered sunset scenery (sky, clouds, a snowy mountain, pine forest), styled after the first art reference. Wheels spin and "+money" pop-ups rise every second. *(Superseded by Part 3: the scrolling road moves to the Drive tab for runs in Step 5; the Garage keeps it as a stand-in until Step 6.)* |
 | 2026-11-25 | Upgrade structure | **Tiers + levels.** Each slot has five tiers: **Worn → Used → Street → Sport → Race**. More tiers will come with later biomes. Buying the next tier replaces the part (big jump: ×1.6, ×2.6, ×4.2, ×6.8 of the slot's base stats) and costs **money + materials** (realistic recipes since Step 4), with **rare materials from Street up**. Each tier has **5 levels** bought with money, each adding +10% of the part's stats; a new tier always beats a maxed previous tier. The starter car's empty turbo slot starts at the Used tier. Costs live in `src/data/economy.ts`. |
 | 2026-11-25 | Income and stats | Each stat has an idle job: **Power** sets speed (money and materials both scale with distance), **Fuel Efficiency** multiplies money per km, and **Grip** multiplies materials per km (~20 materials/h for the starter car). Handling and Durability are for driving runs and biomes. This gives builds different strengths: efficient builds earn money, grippy ones farm materials. |
 | 2026-11-25 | Rare material trickle | Idle driving gives **0.1 rare materials per hour**, raised by **+0.05/h per Salvage Magnet level** (max 10, so 0.6/h at most). The Salvage Magnet costs money + materials and becomes buyable in Step 4. Driving runs are the main source from Step 5. *(Superseded in Step 4: the magnet now multiplies the trickle of every Rare-and-above material, ×1 to ×6; see "Material sources".)* |
 | 2026-11-25 | Balance checks | `npm run simulate` plays the economy for a **Casual** player (2 check-ins a day, 5 min each) and a **Regular** player (4 a day, 10 min each). Automated tests enforce that **no part tier takes more than 7 days**, something is always buyable within 2 days, and the first purchase comes on day 1. Until Step 5 the simulator **assumes 2 runs a day giving 2 rare materials each** (growing with power). Current pace for a Casual player: all Used by day 1, Street by day 3, Sport by day 10, Race by about day 33; longest tier wait 5 days. *(Re-tuned in Step 4; see "Balance after Step 4".)* |
 | 2026-11-25 | Save format v2 | Installed parts are stored as part + level. Older saves are converted automatically. |
 | 2026-11-25 | Materials and rarities | Five rarities: **Common, Uncommon, Rare, Epic, Legendary**. Starting materials are realistic: **Scrap Metal, Rubber** (Common); **Copper Wire, Aluminum** (Uncommon); **Titanium, Carbon Fiber** (Rare); **Ceramic Composite** (Epic). Later biomes add **sci-fi** materials (Graphene, Superconductor Coils, Plasma Cells) and **fantasy** ones (**Orichalcum**, Starmetal, Aether Crystals), probably Epic and Legendary. Data lives in `src/data/materials.ts`. |
-| 2026-11-25 | Material sources | **Common and Uncommon** drop per km of idle driving, scaled by Grip. **Rare and Epic** only trickle in while idle; the Salvage Magnet multiplies that trickle, and **driving runs** (Step 5) are their main source. Every drop rate **grows with progress** (the car's average part tier, 0–4; biomes will add to it later), so rarer materials become more common and come in bigger amounts as the game goes on. Ceramic doesn't drop while idle until progress 3. |
+| 2026-11-25 | Material sources | **Common and Uncommon** drop per km of idle driving, scaled by Grip. **Rare and Epic** only trickle in while idle; the Salvage Magnet multiplies that trickle, and **driving runs** (Step 5) are their main source. Every drop rate **grows with progress** (the car's average part tier, 0–4; biomes will add to it later), so rarer materials become more common and come in bigger amounts as the game goes on. Ceramic doesn't drop while idle until progress 3. *(Updated by Part 3: from Step 6, farm deposits and drones replace per-km idle drops; runs give finds along the road.)* |
 | 2026-11-25 | Part recipes | Each part tier needs materials that match the real part, e.g. tyres need Rubber; engines need Scrap, Aluminum and Copper; turbos need Aluminum, Copper and then Titanium; Race brakes need Carbon Fiber and Ceramic. Used parts need only Common/Uncommon materials, a few Street parts need a little Titanium, and every Race part needs Rare or better. The table is `PART_RECIPES` in `src/data/economy.ts`. |
 | 2026-11-25 | Buying upgrades | Tap a part card to open its panel. It shows stat changes, each cost with owned/needed amounts (green or red), a **Level up** button and an **Install** button for the next tier; buttons are disabled when unaffordable. Cards show tier colour, level and a dot when something is affordable. The **Workshop** button holds the Salvage Magnet. The top bar has Money plus a **Materials** button that opens the inventory. |
 | 2026-11-25 | Visible upgrades | Installed parts change the car: rim style by tyre tier (rusty steel → steel → silver 5-spoke → gunmetal multi-spoke → black with an orange lip), brake calipers coloured by brake tier and visible through spoked rims, exhaust tip by tier, an intercooler in the bumper once a turbo is fitted, a lower stance with Street and Sport suspension, and **rust disappears patch by patch** as the car's average tier rises. |
-| 2026-11-25 | Balance after Step 4 | Casual player: all parts Used by day 1, Street by day 1.5, Sport by day 8, **Race by day 30**; longest wait for a part tier 5.5 days; never more than 1.5 days without something to buy. Regular player: Race by day 23. Run rewards are still the `PLANNED_RUNS` assumption (2 runs a day giving Titanium, Carbon Fiber, and Ceramic from progress 2). |
+| 2026-11-25 | Balance after Step 4 | Casual player: all parts Used by day 1, Street by day 1.5, Sport by day 8, **Race by day 30**; longest wait for a part tier 5.5 days; never more than 1.5 days without something to buy. Regular player: Race by day 23. Run rewards are still the `PLANNED_RUNS` assumption (2 runs a day giving Titanium, Carbon Fiber, and Ceramic from progress 2). *(The `PLANNED_RUNS` assumption is replaced by real runs in Step 5.)* |
 | 2026-11-25 | Save format v3 | Resources are money plus a stock of each named material. Older saves convert automatically: old materials become Scrap Metal, old rare materials become Titanium. |
+| 2026-11-25 | Core loop revision | Adopted the designer's revised loop (see **Part 3**): Farm (home) → materials and money; Garage → car upgrades; Drive runs → how far the car gets, which unlocks biomes and milestones. |
+| 2026-11-25 | Run limits | **Refilling fuel:** each run uses one fuel tank; tanks refill over time (placeholder: one every 40 min) and **up to 3 are stored**. Tank count and refill speed can become upgrades. Resolves open questions 2 and 4 (runs auto-drive; optional taps such as nitro are a new open question). |
+| 2026-11-25 | Run rewards | Each run pays **money per km** (more in later biomes), plus occasional **material finds** along the road (rarer further out) and a **bonus for a new best distance**. Reaching a biome boundary for the first time triggers a milestone that unlocks that biome. Resolves open question 1. |
+| 2026-11-25 | Money in the new loop | **Drone hauls are worth money** (scrap value) as well as materials, plus run payouts. Until drones arrive (Step 6), the car's idle-driving income stays as a stand-in. |
+| 2026-11-25 | Farm start | The farm starts with **tap-to-scavenge**: tap scrap piles to collect by hand. An early milestone unlocks the **first drone**, which then works automatically, including while away. Tapping keeps helping (e.g. tap a pile to mine it faster). |
 | 2026-11-25 | Big numbers | Amounts use standard JavaScript numbers (up to about 10^308). They display as 1.23K, 45.6M and so on up to Dc, then aa, ab, and onwards. Revisit only if the economy ever needs larger numbers. |
 
 ## Open Questions
 
 These need answers before the build step in brackets. When one is resolved, move the answer into the Decisions Log.
 
-1. **Biome unlocking.** Are new biomes reached through idle progress, driving runs, or both? Does the idle car farm whichever unlocked biome the player chooses? *(before Step 6)*
-2. **Fuel's two roles.** Fuel limits how far a car gets in a run, and there is also a 2–3 runs/day cap. Are these separate (tank size sets run length, a daily allowance sets the number of runs), or is fuel itself the daily limit? *(before Step 5 / Step 7)*
+1. ~~**Biome unlocking.**~~ Resolved: biomes unlock by reaching them on drive runs (see Decisions Log, "Run rewards").
+2. ~~**Fuel's two roles.**~~ Resolved: refilling fuel tanks, up to 3 stored (see "Run limits").
 3. **One car or several?** "Select their current vehicle" and "manage different vehicle builds" could mean one car with saved part setups, or a collection of cars. The save data will store a list of cars either way, so both stay possible. *(before Step 4)*
-4. **Driving run controls.** What does the player actually do during a run: steering, throttle and brake timing, dodging hazards, choosing routes? *(before Step 5)*
-5. **Offline earnings cap.** How many hours of income build up while the player is away? Placeholder: **8 hours** at full rate, set in `src/data/economy.ts`. Still to decide: the final cap, whether it can be upgraded (e.g. through the skill tree), and whether offline time should earn at a reduced rate. *(before Step 9; the placeholder is in use since Step 2)*
+4. ~~**Driving run controls.**~~ Resolved for now: runs drive themselves; the build decides the distance. Optional taps are question 9.
+5. **Offline earnings cap.** How many hours of income build up while the player is away? Placeholder: **8 hours** at full rate, set in `src/data/economy.ts`. Still to decide: the final cap, whether it can be upgraded (e.g. through the skill tree), and whether offline time should earn at a reduced rate. *(before Step 10; the placeholder is in use since Step 2)*
 6. **Cloud saves and cheating.** Saves start out on the device. Cloud saves or accounts will be needed for purchases and for switching phones. Daily run limits and offline earnings can be cheated by changing the phone's clock, which is acceptable early on but needs a decision before release. *(before release)*
 7. **Art.** The style references are in (see Art Style Notes). Still open: who produces the final pixel art, and how the references' calm sunset and daylight landscapes fit the "dark underground street racing" mood in section 8. For example, biomes could use the landscape style while the garage and menus keep a night-time neon look. Placeholder art is used until then. *(before final art; mood question before Step 6)*
-8. **Build specialization.** How do builds specialize so that several are viable, not one best setup? For example, some biomes could have materials that only off-road builds can farm efficiently. *(before Step 4 / Step 6)*
+8. **Build specialization.** How do builds specialize so that several are viable, not one best setup? For example, some biomes could have materials that only off-road builds can farm efficiently. *(before Step 8)*
+9. **Taps during runs.** Should runs offer optional interaction, such as tapping for nitro bursts or choosing a lane? *(before Step 11)*
+10. **Distance unit.** Kilometres or miles (or a setting)? The game shows km for now. *(any time)*
+11. **Garage upgrades.** Drones return materials "to your garage, where they can upgrade your car and garage." What should garage upgrades be (storage, more drone bays, refinery)? *(before Step 7)*
+12. **Drone look.** What should drones look like (flying, wheeled, crawler), and should they change visibly with upgrades? *(before Step 6)*
 
 ## Art Style Notes
 
@@ -462,9 +474,42 @@ The game is built one step at a time. Each step should leave a playable, testabl
 - [x] **Step 2: Idle driving and resource generation.** The car drives constantly and earns over time, based on its stats. Offline earnings build up while away, up to the cap, and are collected on return. *(Priority 2)*
 - [x] **Step 3: Currency and material economy.** Money, materials and rare materials. Materials come from idle driving; rare materials come only as a very small, upgradable idle trickle until driving runs arrive in Step 5. All costs and earnings live in data files, not code. Also a **balance simulator** script that reports how long each upgrade and milestone takes, to check the one-week rule in section 5. *(Priority 3)*
 - [x] **Step 4: Basic vehicle upgrades.** Buttons to buy the next tier and part levels (the tiers, costs and rules exist since Step 3), the Salvage Magnet, before/after stat previews, and visible part changes on the car. *(Priority 4)*
-- [ ] **Step 5: Interactive driving run.** The first playable run: the car's build decides how far it gets, with rewards based on performance. *(Priority 5)*
-- [ ] **Step 6: First biome and road progression.** The starting biome, with distance milestones and a road that gets harder. *(Priority 6)*
-- [ ] **Step 7: Fuel and daily driving limits.** *(Priority 7)*
-- [ ] **Step 8: Basic customization.** Paint colors and finishes to start. *(Priority 8)*
-- [ ] **Step 9: Skill tree.** *(Priority 9)*
-- [ ] **Step 10: Expansion.** More biomes, parts and builds; consumables; random run events and weather; audio hookup; Capacitor mobile packaging; monetization. *(Priority 10)*
+*Steps 5 onward were re-planned with the core loop revision (Part 3).*
+
+- [ ] **Step 5: Drive runs, milestones and the biome road.** The Drive tab: each run starts at the Junkyard on one endless road through biomes (Junkyard Wastes, Rust Highway, Industrial Zone, Desert Canyons), uses a fuel tank, and ends when fuel or the car's health runs out. Rewards: money per km, material finds, new-best bonus. Milestones announce new biomes and major unlocks. A World tab shows the biome road map and milestone list. The simulator uses real runs.
+- [ ] **Step 6: Farm screen.** The new home tab: a top-down, slightly angled view of the Junkyard. Tap scrap piles to scavenge; an early milestone unlocks the first drone, which collects and returns hauls (materials + money) to the garage, including while away. Replaces the car's idle-driving income.
+- [ ] **Step 7: Drone upgrade tree and garage.** Drone speed, storage, count, mining power, range and more; garage upgrades; economy rebalance with the simulator.
+- [ ] **Step 8: Biome farms.** Reaching a biome on a run unlocks its farm, with its own deposits, materials and upgrades; switch between unlocked farms.
+- [ ] **Step 9: Basic customization.** Paint colors and finishes to start.
+- [ ] **Step 10: Skill tree.**
+- [ ] **Step 11: Run extras.** Weather and road events, consumables, optional run interaction, and an upgrade to start runs further along the road.
+- [ ] **Step 12: Expansion.** More biomes with sci-fi and fantasy materials (Graphene, Orichalcum…), more parts and builds, audio hookup, Capacitor mobile packaging, monetization.
+
+---
+
+# Part 3 — Core Loop Revision (2026-11-25)
+
+The designer revised the core of the game after Step 4. Where this conflicts with Part 1, this part wins. Summary of the designer's direction, with the choices made together:
+
+## The loop
+
+1. **Farm (home screen).** A top-down, slightly angled view of the biome you're farming, where players spend most of their time. It should feel lively and interactive rather than a screen of buttons. At first you **tap scrap piles** to scavenge by hand. One of the first core unlocks is a small **scrap/mining drone** that slowly collects resources and returns them to your garage. Drone hauls bring **materials and money**. Drones keep working while you're away.
+2. **Drones.** A whole new upgrade tree: **speed, storage, quantity** and more.
+3. **Garage.** Materials are used to upgrade the **car** (parts, tiers, levels) and the **garage**.
+4. **Drive runs (side view).** The main way players show and check progress. One long, seemingly endless road that changes biome as you go, and **every run starts at the beginning area** (for now a wasteland junkyard; starting further along becomes an upgrade later). Early on the car barely manages a mile or two; with upgrades, areas you could barely manage become something you zoom through in seconds. Runs use **fuel tanks that refill over time** (up to 3 stored) and pay **money per distance**, **material finds** and a **new-best bonus**.
+5. **Milestones.** Announce pivotal progress: mainly **reaching a new biome** on a run, or a **major unlock** through upgrades (a new skill tree, a new progression system, drones…).
+6. **Biomes.** Reaching a new biome on a run **unlocks it as a farm**, with its own ores/materials and the upgrades that come with them. The early road is realistic (junkyard, highway, industrial, desert); later biomes turn sci-fi and fantasy, matching the materials (Graphene, Orichalcum…).
+
+## Screens
+
+Tabs: **Farm | Garage | Drive | Upgrades | World**.
+- **Farm:** top-down biome view with deposits, drones and the garage building.
+- **Garage:** the side-view car, its stats and parts.
+- **Drive:** start runs, watch the car drive the biome road, see results.
+- **Upgrades:** the drone tree, and later the skill tree.
+- **World:** the biome road map and the milestone list.
+
+## What carries over from Steps 0–4
+
+Car parts (tiers + levels), materials, rarities and recipes, saving and migrations, the side-view car and scrolling scenery, panels, and the balance simulator. The car's idle-driving income stays as a stand-in until drones replace it in Step 6.
+
