@@ -399,10 +399,14 @@ Make players feel like they are constantly building something. Every upgrade sho
 
 | Date | Topic | Decision |
 | --- | --- | --- |
-| 2026-11-25 | Tech stack | **TypeScript + Phaser 3**, built with **Vite**. It runs in a desktop browser for testing and development, and will be packaged as iOS/Android apps later with **Capacitor**. |
+| 2026-11-25 | Tech stack | **TypeScript + Phaser 3**, built with **Vite**. It runs in a desktop browser for testing and development, and will be packaged as iOS/Android apps later with **Capacitor**. *(Engine version changed to Phaser 4; see below.)* |
 | 2026-11-25 | Screen layout | **Portrait** orientation (phone held upright). The car is shown in **side view**, so installed parts like wheels, spoilers and exhaust are visible. |
 | 2026-11-25 | Paid content | Paid items are **cosmetics plus optional mild speed-ups**, such as longer offline earnings or time skips. Nothing bought gives power or content that free players can't earn. **No ads at all.** |
 | 2026-11-25 | Design doc format | Part 1 keeps the original wording. Decisions, questions and the roadmap live in Part 2. |
+| 2026-11-25 | Engine version | **Phaser 4** instead of Phaser 3. Phaser 3's last release was in May 2025. Phaser 4 has been stable since April 2026, has a faster renderer, and has better lighting effects (useful for section 7's "strong lighting and environmental effects"). The basic API is the same. |
+| 2026-11-25 | Screen size | The game is **1080 units wide**, and its height follows the phone's shape (1.5 to 2.44 times the width), so it fills the screen. Desktop shows a typical 19.5:9 phone shape. Each tab screen must fit in a content area at least **1280 units tall**, between the top bar (150) and the tab bar (190). |
+| 2026-11-25 | Saving | Progress is saved **on the device**: every 10 seconds, and whenever the game is hidden or closed. The previous save is kept as a backup in case one is damaged. Saves carry a version number, so older saves can be converted when the game changes. Cloud saves are still Open Question 6. |
+| 2026-11-25 | Big numbers | Amounts use standard JavaScript numbers (up to about 10^308). They display as 1.23K, 45.6M and so on up to Dc, then aa, ab, and onwards. Revisit only if the economy ever needs larger numbers. |
 
 ## Open Questions
 
@@ -421,7 +425,7 @@ These need answers before the build step in brackets. When one is resolved, move
 
 The game is built one step at a time. Each step should leave a playable, testable game. Check a step off when it's done.
 
-- [ ] **Step 0: Project setup.** Vite + TypeScript + Phaser 3 project, portrait screen scaling for phones and desktop browsers, bottom tab bar (Garage / Driving / Progression / World), save/load to the device (localStorage), main game tick, and formatting for large numbers.
+- [x] **Step 0: Project setup.** Vite + TypeScript + Phaser 4 project, portrait screen scaling for phones and desktop browsers, bottom tab bar (Garage / Driving / Progression / World), save/load to the device (localStorage), main game tick, and formatting for large numbers.
 - [ ] **Step 1: Basic vehicle and garage.** The rusty starter car shown in the garage, its part slots, and a vehicle stats panel. *(Priority 1)*
 - [ ] **Step 2: Idle driving and resource generation.** The car drives constantly and earns over time, based on its stats. Offline earnings build up while away, up to the cap, and are collected on return. *(Priority 2)*
 - [ ] **Step 3: Currency and material economy.** Money, materials and rare materials. All costs and earnings live in data files, not code. Also a **balance simulator** script that reports how long each upgrade and milestone takes, to check the one-week rule in section 5. *(Priority 3)*

@@ -15,8 +15,25 @@ The full design plan, decisions, open questions and build roadmap are in
 
 ## Key rules
 
-- **Stack:** TypeScript + Phaser 3, built with Vite. Capacitor is used later for iOS/Android.
+- **Stack:** TypeScript + Phaser 4, built with Vite. Capacitor is used later for iOS/Android.
 - **Layout:** Mobile-first, portrait screens. The car is shown in side view. Every screen must also work in a desktop browser.
 - **Balance numbers live in data files, not in code,** so pacing can be tuned and simulated. No required upgrade or milestone should take more than about a week of play.
 - **Original art only.** Take inspiration from reference games, but never copy their mechanics, art or progression. Vehicles must be original designs, not real car brands or models.
 - **No ads.** Paid content is cosmetics plus optional mild speed-ups. Nothing paid may give power or content that free players can't earn.
+
+## Commands
+
+- `npm run dev`: start the dev server (open the printed URL; it also listens on the local network for phones).
+- `npm test`: unit tests (Vitest).
+- `npm run typecheck`: TypeScript check.
+- `npm run build`: type check and production build into `dist/`.
+
+## Code layout
+
+- `src/core/`: game logic and state (`GameModel`, saving, fixed-step clock, number formatting). **No Phaser imports here**, so it can be unit-tested in `tests/`.
+- `src/data/`: tunable numbers and game data.
+- `src/scenes/`: Phaser scenes. `UIScene` is the always-on top bar and tab bar. Each tab is its own scene, drawn only in the content area (its camera viewport) using local coordinates. `PlaceholderTabScene` stands in for tabs not built yet.
+- `src/ui/`: layout, theme colours, tab list and placeholder icons.
+- Screen units: 1080 wide, with variable height (see `src/ui/layout.ts`). Tab screens must fit 1280 units of content height.
+- When the save format changes, bump `SAVE_VERSION` in `src/core/state.ts` and add a migration in `src/core/save.ts`. New fields with defaults are filled in automatically.
+- Dev build helpers: keys 1–4 switch tabs, and `__carGame.resetProgress()` in the browser console wipes the save.
