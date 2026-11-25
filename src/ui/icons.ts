@@ -1,5 +1,4 @@
-import Phaser from 'phaser';
-import type { Resources } from '../core/state';
+import type Phaser from 'phaser';
 import type { TabId } from './tabs';
 
 /*
@@ -8,7 +7,6 @@ import type { TabId } from './tabs';
 
 type Graphics = Phaser.GameObjects.Graphics;
 
-const vec = (x: number, y: number) => new Phaser.Math.Vector2(x, y);
 
 /** Draws a tab icon centred on (cx, cy), fitting in a square of the given size. */
 export function drawTabIcon(g: Graphics, id: TabId, cx: number, cy: number, size: number, color: number): void {
@@ -53,52 +51,6 @@ export function drawTabIcon(g: Graphics, id: TabId, cx: number, cy: number, size
       g.strokeCircle(cx, cy, s * 0.88);
       g.strokeEllipse(cx, cy, s * 0.85, s * 1.76);
       g.lineBetween(cx - s * 0.88, cy, cx + s * 0.88, cy);
-      break;
-    }
-  }
-}
-
-/** Draws a resource icon centred on (cx, cy) with radius r. */
-export function drawResourceIcon(
-  g: Graphics,
-  id: keyof Resources,
-  cx: number,
-  cy: number,
-  r: number,
-  colors: Record<keyof Resources, number>,
-  holeColor: number,
-): void {
-  const color = colors[id];
-  switch (id) {
-    case 'money': {
-      // Coin with an inner ring.
-      g.fillStyle(color, 1);
-      g.fillCircle(cx, cy, r);
-      g.lineStyle(4, holeColor, 0.35);
-      g.strokeCircle(cx, cy, r * 0.65);
-      break;
-    }
-    case 'materials': {
-      // Hex nut.
-      const points = Array.from({ length: 6 }, (_, i) => {
-        const angle = (Math.PI / 3) * i + Math.PI / 6;
-        return vec(cx + Math.cos(angle) * r, cy + Math.sin(angle) * r);
-      });
-      g.fillStyle(color, 1);
-      g.fillPoints(points, true);
-      g.fillStyle(holeColor, 1);
-      g.fillCircle(cx, cy, r * 0.38);
-      break;
-    }
-    case 'rareMaterials': {
-      // Gem.
-      g.fillStyle(color, 1);
-      g.fillPoints(
-        [vec(cx, cy - r), vec(cx + r * 0.8, cy), vec(cx, cy + r), vec(cx - r * 0.8, cy)],
-        true,
-      );
-      g.fillStyle(0xffffff, 0.35);
-      g.fillTriangle(cx, cy - r, cx + r * 0.8, cy, cx, cy);
       break;
     }
   }

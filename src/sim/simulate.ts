@@ -1,17 +1,19 @@
+import { formatPrecise } from '../core/format';
 import { computeIdleRates, computeOfflineEarnings } from '../core/idle';
-import type { Resources } from '../core/state';
+import { emptyResources, type Resources } from '../core/state';
 import {
   buyLevelUp,
   buyNextTier,
   canAfford,
   levelUpCost,
   nextTierPart,
-  rareTrickleUpgradeCost,
+  salvageMagnetCost,
   spend,
   tierCost,
 } from '../core/upgrades';
-import { computeCarStats, createCar, getPart, type CarState, type QualityId } from '../core/vehicle';
+import { carProgress, computeCarStats, createCar, getPart, type CarState, type QualityId } from '../core/vehicle';
 import { ECONOMY, PLANNED_RUNS, type Cost } from '../data/economy';
+import { MATERIAL_IDS, MATERIALS } from '../data/materials';
 import { QUALITIES, SLOTS, STARTER_MODEL_ID, TIER_ORDER } from '../data/vehicles';
 
 /*
@@ -56,6 +58,8 @@ export interface SimResult {
   /** True if every slot reached the top tier. */
   finished: boolean;
   days: number;
+  /** What the player holds when the simulation ends. */
+  finalResources: Resources;
 }
 
 const DAY = 86_400;
@@ -76,9 +80,16 @@ function lowestRank(car: CarState): number {
   return lowest;
 }
 
+/** Resources left after setting aside `reserve` (can go negative). */
+function minus(resources: Resources, reserve: Cost): Resources {
+  const materials = { ...resources.materials };
+  for (const id of MATERIAL_IDS) materials[id] -= reserve.materials?.[id] ?? 0;
+  return { money: resources.money - (reserve.money ?? 0), materials };
+}
+
 export function simulate(profile: PlayerProfile, maxDays = 180): SimResult {
   const car = createCar('sim', STARTER_MODEL_ID);
-  const resources: Resources = { money: 0, materials: 0, rareMaterials: 0 };
+  const resources = emptyResources();
   let magnetLevel = 0;
   let t = 0;
   let lastRunDay = -1;
@@ -87,19 +98,29 @@ export function simulate(profile: PlayerProfile, maxDays = 180): SimResult {
   const tierMilestones = TIER_ORDER.slice(1).map((quality) => ({ quality, day: null as number | null }));
   const turboMilestone: Milestone = { label: 'First turbo fitted', day: null };
 
-  const rates = () => computeIdleRates(computeCarStats(car), magnetLevel);
+  const rates = () => computeIdleRates(computeCarStats(car), magnetLevel, carProgress(car));
   const earn = (seconds: number, offline: boolean) => {
     const r = rates();
-    const earned = offline
-      ? computeOfflineEarnings(r, seconds)
-      : {
-          money: r.moneyPerSecond * seconds,
-          materials: r.materialsPerSecond * seconds,
-          rareMaterials: r.rareMaterialsPerSecond * seconds,
-        };
-    resources.money += earned.money;
-    resources.materials += earned.materials;
-    resources.rareMaterials += earned.rareMaterials;
+    if (offline) {
+      const earned = computeOfflineEarnings(r, seconds);
+      resources.money += earned.money;
+      for (const id of MATERIAL_IDS) resources.materials[id] += earned.materials[id];
+    } else {
+      resources.money += r.moneyPerSecond * seconds;
+      for (const id of MATERIAL_IDS) resources.materials[id] += r.materialsPerSecond[id] * seconds;
+    }
+  };
+
+  const runRewards = () => {
+    const progress = carProgress(car);
+    const scale =
+      (computeCarStats(car).power / 58) ** PLANNED_RUNS.powerExponent * (1 + PLANNED_RUNS.progressBonus * progress);
+    for (const [id, amount] of Object.entries(PLANNED_RUNS.materialsPerRun)) {
+      resources.materials[id as keyof typeof resources.materials] += (amount ?? 0) * scale * PLANNED_RUNS.runsPerDay;
+    }
+    if (progress >= PLANNED_RUNS.ceramicFromProgress) {
+      resources.materials.ceramic += PLANNED_RUNS.ceramicPerRun * scale * PLANNED_RUNS.runsPerDay;
+    }
   };
 
   const options = (): Option[] => {
@@ -126,7 +147,7 @@ export function simulate(profile: PlayerProfile, maxDays = 180): SimResult {
         });
       }
     }
-    const magnetCost = rareTrickleUpgradeCost(magnetLevel);
+    const magnetCost = salvageMagnetCost(magnetLevel);
     if (magnetCost) {
       list.push({
         kind: 'magnet',
@@ -138,29 +159,22 @@ export function simulate(profile: PlayerProfile, maxDays = 180): SimResult {
     return list;
   };
 
-  /** Strategy: buy any affordable new tier first. Otherwise save for the next tier that only lacks money, and spend the surplus on levels and the magnet, cheapest first. */
+  /**
+   * Strategy: buy any affordable new tier first. Otherwise save for the cheapest tier that only
+   * lacks money, and spend the surplus on levels and the magnet, cheapest first.
+   */
   const shop = () => {
     for (;;) {
       const all = options();
       const byMoney = (a: Option, b: Option) => (a.cost.money ?? 0) - (b.cost.money ?? 0);
       const tiers = all.filter((o) => o.kind === 'tier').sort(byMoney);
       const affordableTier = tiers.find((o) => canAfford(resources, o.cost));
-      const pick =
-        affordableTier ??
-        (() => {
-          const goal = tiers.find((o) =>
-            canAfford({ ...resources, money: Infinity }, o.cost),
-          );
-          const reserve: Cost = goal?.cost ?? {};
-          const surplus: Resources = {
-            money: resources.money - (reserve.money ?? 0),
-            materials: resources.materials - (reserve.materials ?? 0),
-            rareMaterials: resources.rareMaterials - (reserve.rareMaterials ?? 0),
-          };
-          return all
-            .filter((o) => o.kind !== 'tier' && canAfford(surplus, o.cost))
-            .sort(byMoney)[0];
-        })();
+      let pick = affordableTier;
+      if (!pick) {
+        const goal = tiers.find((o) => canAfford({ ...resources, money: Infinity }, o.cost));
+        const surplus = minus(resources, goal?.cost ?? {});
+        pick = all.filter((o) => o.kind !== 'tier' && canAfford(surplus, o.cost)).sort(byMoney)[0];
+      }
       if (!pick || !pick.buy()) return;
       purchases.push({ day: t / DAY, kind: pick.kind, label: pick.label });
     }
@@ -183,9 +197,7 @@ export function simulate(profile: PlayerProfile, maxDays = 180): SimResult {
     const day = Math.floor(t / DAY);
     if (day > lastRunDay) {
       lastRunDay = day;
-      const power = computeCarStats(car).power;
-      const perRun = PLANNED_RUNS.rarePerRun * (power / 58) ** PLANNED_RUNS.powerExponent;
-      resources.rareMaterials += perRun * PLANNED_RUNS.runsPerDay;
+      runRewards();
     }
     shop();
     recordMilestones();
@@ -218,6 +230,7 @@ export function simulate(profile: PlayerProfile, maxDays = 180): SimResult {
     longestPurchaseGap: gapsBetween(purchases),
     finished: lowestRank(car) >= topRank,
     days: t / DAY,
+    finalResources: resources,
   };
 }
 
@@ -248,5 +261,9 @@ export function formatReport(result: SimResult): string {
     `Longest time with nothing to buy: ${result.longestPurchaseGap.days.toFixed(2)} days (ending with ${result.longestPurchaseGap.endedWith})`,
   );
   lines.push(result.finished ? `Every slot at the top tier by ${fmtDay(result.days)}.` : 'Did not reach the top tier everywhere.');
+  lines.push(
+    'Left over at the end: ' +
+      MATERIALS.map((m) => `${m.name} ${formatPrecise(result.finalResources.materials[m.id])}`).join(', '),
+  );
   return lines.join('\n');
 }

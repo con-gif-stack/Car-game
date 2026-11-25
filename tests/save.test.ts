@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { BACKUP_KEY, conformTo, MemoryStorage, parseSave, SAVE_KEY, SaveManager } from '../src/core/save';
 import { createNewState, SAVE_VERSION } from '../src/core/state';
+import { emptyMaterials } from '../src/data/materials';
 
 const T0 = 1_700_000_000_000;
 
@@ -101,14 +102,14 @@ describe('parseSave', () => {
       version: SAVE_VERSION,
       createdAt: T0,
       lastSavedAt: T0,
-      resources: { money: 'lots', materials: 3 },
+      resources: { money: 'lots', materials: { scrapMetal: 3, unknownStuff: 9 } },
       stats: null,
       unknownField: true,
     });
     const state = parseSave(raw, T0);
     expect(state).toEqual({
       ...createNewState(T0),
-      resources: { money: 0, materials: 3, rareMaterials: 0 },
+      resources: { money: 0, materials: { ...emptyMaterials(), scrapMetal: 3 } },
     });
   });
 

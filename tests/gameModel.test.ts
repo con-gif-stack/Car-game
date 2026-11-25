@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { ECONOMY } from '../src/data/economy';
+import { MATERIAL_IDS } from '../src/data/materials';
 import { GAME_CONFIG } from '../src/data/gameConfig';
 import { GameModel } from '../src/core/GameModel';
 import { MemoryStorage, SAVE_KEY, SaveManager } from '../src/core/save';
@@ -86,8 +87,8 @@ describe('GameModel', () => {
     const rates = model.idleRates();
     play(model, 5);
     expect(model.state.resources.money).toBeCloseTo(rates.moneyPerSecond * 5);
-    expect(model.state.resources.materials).toBeCloseTo(rates.materialsPerSecond * 5);
-    expect(model.state.resources.rareMaterials).toBeCloseTo(rates.rareMaterialsPerSecond * 5);
+    expect(model.state.resources.materials.scrapMetal).toBeCloseTo(rates.materialsPerSecond.scrapMetal * 5);
+    expect(model.state.resources.materials.titanium).toBeCloseTo(rates.materialsPerSecond.titanium * 5);
     expect(model.state.stats.distanceKm).toBeCloseTo(rates.kmPerSecond * 5);
   });
 
@@ -118,12 +119,12 @@ describe('GameModel', () => {
     // Pending earnings are saved, so closing the game before collecting loses nothing.
     expect(saves.load().state.pendingOffline.money).toBeCloseTo(expected);
 
-    const expectedMaterials = model.idleRates().materialsPerSecond * 3600 * ECONOMY.offline.efficiency;
-    expect(model.state.pendingOffline.materials).toBeCloseTo(expectedMaterials);
+    const expectedScrap = model.idleRates().materialsPerSecond.scrapMetal * 3600 * ECONOMY.offline.efficiency;
+    expect(model.state.pendingOffline.materials.scrapMetal).toBeCloseTo(expectedScrap);
     expect(model.collectOffline()).toBeCloseTo(expected);
     expect(model.state.resources.money).toBeCloseTo(expected);
-    expect(model.state.resources.materials).toBeCloseTo(expectedMaterials);
-    expect(model.state.resources.rareMaterials).toBeGreaterThan(0);
+    expect(model.state.resources.materials.scrapMetal).toBeCloseTo(expectedScrap);
+    expect(model.state.resources.materials.titanium).toBeGreaterThan(0);
     expect(model.state.pendingOffline.money).toBe(0);
     expect(model.collectOffline()).toBe(0);
   });
@@ -143,6 +144,40 @@ describe('GameModel', () => {
     const saves = new SaveManager(storage, () => T0);
     const model = new GameModel(createNewState(T0), saves, () => T0, 7200);
     expect(model.state.pendingOffline.seconds).toBe(7200);
+  });
+
+  it('buys tiers, levels and the Salvage Magnet: spends, installs, saves and announces it', () => {
+    const { model, saves } = setup();
+    const bought: string[] = [];
+    model.events.on('purchased', (kind, slot) => bought.push(`${kind}:${slot}`));
+    const { resources } = model.state;
+
+    expect(model.buyNextTier('exhaust')).toBe(false); // can't afford yet
+    resources.money = 1e9;
+    for (const id of MATERIAL_IDS) resources.materials[id] = 1e6;
+
+    expect(model.buyNextTier('exhaust')).toBe(true);
+    expect(model.activeCar.parts.exhaust).toEqual({ partId: 'exhaust-used', level: 1 });
+    expect(model.buyLevelUp('exhaust')).toBe(true);
+    expect(model.activeCar.parts.exhaust?.level).toBe(2);
+    expect(model.buySalvageMagnet()).toBe(true);
+    expect(model.state.workshop.salvageMagnetLevel).toBe(1);
+    expect(resources.money).toBeLessThan(1e9);
+    expect(bought).toEqual(['tier:exhaust', 'level:exhaust', 'salvageMagnet:null']);
+
+    // Purchases are saved straight away.
+    const saved = saves.load().state;
+    expect(saved.garage.cars[0]?.parts.exhaust).toEqual({ partId: 'exhaust-used', level: 2 });
+    expect(saved.workshop.salvageMagnetLevel).toBe(1);
+  });
+
+  it('upgrading parts raises progress, so rare materials drop faster', () => {
+    const { model } = setup();
+    const before = model.idleRates().materialsPerSecond.titanium;
+    model.state.resources.money = 1e9;
+    for (const id of MATERIAL_IDS) model.state.resources.materials[id] = 1e6;
+    for (const slot of ['engine', 'tires', 'brakes', 'exhaust'] as const) model.buyNextTier(slot);
+    expect(model.idleRates().materialsPerSecond.titanium).toBeGreaterThan(before);
   });
 
   it('stops saving after the save is wiped', () => {

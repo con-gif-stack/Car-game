@@ -8,6 +8,7 @@ import {
   LANE_PERIOD,
 } from '../art/landscape';
 import { RUSTBUCKET_LAYOUT } from '../art/carArt';
+import type { CarState } from '../core/vehicle';
 import { CarView } from './CarView';
 import { ensureGridTexture } from './textures';
 
@@ -42,6 +43,7 @@ export class DriveView {
     private readonly scene: Phaser.Scene,
     width: number,
     height: number,
+    car: CarState,
   ) {
     // One pixel-art pixel = `scale` screen units, shared by the car and the scenery.
     const fit = Math.min((width - 200) / CarView.widthAt(1), (height * 0.55) / CarView.heightAt(1));
@@ -69,7 +71,7 @@ export class DriveView {
     this.addLayer(key('trees'), (roadTopPx - treeHeight) * s, pxWidth, 0.35);
     this.addLayer(key('road'), roadTopPx * s, pxWidth, 1);
 
-    this.car = new CarView(scene, Math.round(width * 0.47), this.groundY, s);
+    this.car = new CarView(scene, Math.round(width * 0.47), this.groundY, s, car);
   }
 
   /** Advances the scenery and wheels for a car moving at `speedKmh`. */

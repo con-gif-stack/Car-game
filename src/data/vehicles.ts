@@ -16,11 +16,12 @@ import type {
 
 /** Car stats, in the order they are shown. */
 export const STATS: readonly StatDef[] = [
-  { id: 'power', label: 'Power', unit: 'hp', displayMax: 300 },
-  { id: 'grip', label: 'Grip', displayMax: 100 },
-  { id: 'handling', label: 'Handling', displayMax: 100 },
-  { id: 'efficiency', label: 'Fuel Efficiency', displayMax: 100 },
-  { id: 'durability', label: 'Durability', displayMax: 100 },
+  // Bars are full for a fully upgraded Race-tier car (raise these when later tiers arrive).
+  { id: 'power', label: 'Power', unit: 'hp', displayMax: 700 },
+  { id: 'grip', label: 'Grip', displayMax: 160 },
+  { id: 'handling', label: 'Handling', displayMax: 160 },
+  { id: 'efficiency', label: 'Fuel Efficiency', displayMax: 200 },
+  { id: 'durability', label: 'Durability', displayMax: 120 },
 ];
 
 /** Part slots, in the order they are shown (design doc section 3A). */

@@ -67,6 +67,22 @@ const MIGRATIONS: Record<number, (save: RawSave) => RawSave> = {
     });
     return { ...save, version: 2, garage: { ...garage, cars: migratedCars } };
   },
+  // v2 → v3: one generic "materials" and one "rareMaterials" number became a stock of named
+  // materials. Old materials become Scrap Metal; old rare materials become Titanium.
+  2: (save) => {
+    const convert = (raw: unknown): unknown => {
+      if (!isRecord(raw)) return raw;
+      const { materials, rareMaterials, ...rest } = raw;
+      return {
+        ...rest,
+        materials: {
+          scrapMetal: typeof materials === 'number' ? materials : 0,
+          titanium: typeof rareMaterials === 'number' ? rareMaterials : 0,
+        },
+      };
+    };
+    return { ...save, version: 3, resources: convert(save.resources), pendingOffline: convert(save.pendingOffline) };
+  },
 };
 
 function isRecord(value: unknown): value is RawSave {

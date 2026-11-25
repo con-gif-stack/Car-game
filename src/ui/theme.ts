@@ -11,8 +11,6 @@ export const COLORS = {
   accentAlt: 0x2ee6ff,
   textSecondary: 0x9a98b8,
   money: 0xffd23f,
-  materials: 0x9fb4c7,
-  rareMaterials: 0xb36bff,
 } as const;
 
 export const TEXT_COLORS = {

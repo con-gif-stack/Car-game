@@ -1,11 +1,16 @@
 import Phaser from 'phaser';
 import { formatDistance, formatPrecise } from '../core/format';
-import { computeCarStats, getActiveCar, getInstalledPart, partStatsAtLevel, type SlotDef } from '../core/vehicle';
+import type { PurchaseKind } from '../core/GameModel';
+import { canAfford, levelUpCost, nextTierPart, tierCost } from '../core/upgrades';
+import { computeCarStats, getInstalledPart, type SlotDef, type SlotId } from '../core/vehicle';
+import { PART_LEVELS } from '../data/economy';
+import { MATERIAL_IDS, MATERIALS, RARITIES, type MaterialId } from '../data/materials';
 import { CAR_MODELS, QUALITIES, SLOTS, STATS } from '../data/vehicles';
 import { COLORS, FONT_FAMILY, TEXT_COLORS } from '../ui/theme';
 import type { AppContext } from './context';
-import { cssColor, openDialog, type DialogLine } from './dialog';
 import { DriveView } from './DriveView';
+import { cssColor } from './panel';
+import { openPartPanel, openWorkshopPanel, panelSignature } from './panels';
 
 const PAD = 32;
 const SECTION_GAP = 24;
@@ -16,10 +21,14 @@ const STATS_PANEL_HEIGHT = 24 + STATS.length * STAT_ROW_HEIGHT + 16;
 const CARD_COLUMNS = 4;
 const CARD_HEIGHT = 150;
 const CARD_GAP = 16;
-const PARTS_HEADER = 44;
+const PARTS_HEADER = 56;
 const PARTS_SECTION_HEIGHT = PARTS_HEADER + 2 * CARD_HEIGHT + CARD_GAP;
 /** Seconds between "+money" pop-ups over the car. */
-const POPUP_INTERVAL = 1;
+const MONEY_POPUP_INTERVAL = 1;
+/** Seconds between material pop-ups, so several at once don't pile up. */
+const MATERIAL_POPUP_INTERVAL = 0.4;
+/** Seconds between checks for whether an open panel needs redrawing. */
+const PANEL_REFRESH_INTERVAL = 0.25;
 
 interface StatRow {
   fill: Phaser.GameObjects.Rectangle;
@@ -32,7 +41,11 @@ interface PartCard {
   background: Phaser.GameObjects.Rectangle;
   qualityStrip: Phaser.GameObjects.Rectangle;
   name: Phaser.GameObjects.Text;
+  level: Phaser.GameObjects.Text;
+  badge: Phaser.GameObjects.Arc;
 }
+
+type OpenPanel = { kind: 'part'; slot: SlotDef } | { kind: 'workshop' };
 
 const text = (size: number, color: string, bold = false): Phaser.Types.GameObjects.Text.TextStyle => ({
   fontFamily: FONT_FAMILY,
@@ -49,8 +62,8 @@ const overlayText = (size: number, color: string, bold = false): Phaser.Types.Ga
 });
 
 /**
- * Garage tab: the active car idle-driving at the top, then its stats and the part installed
- * in each slot. Tapping a part opens its details.
+ * Garage tab: the active car idle-driving at the top, then its stats and the part in each slot.
+ * Tapping a part opens its panel, where it can be levelled up or replaced with the next tier.
  */
 export class GarageScene extends Phaser.Scene {
   private readonly statRows = new Map<string, StatRow>();
@@ -62,11 +75,17 @@ export class GarageScene extends Phaser.Scene {
   private tripText!: Phaser.GameObjects.Text;
   private materialsRateText!: Phaser.GameObjects.Text;
   private rareRateText!: Phaser.GameObjects.Text;
-  /** Whole materials / rare materials last seen, to pop up "+1" when another one arrives. */
-  private lastWholeMaterials = 0;
-  private lastWholeRare = 0;
-  private modal: Phaser.GameObjects.Container | null = null;
-  private popupTimer = 0;
+
+  private panel: Phaser.GameObjects.Container | null = null;
+  private openPanel: OpenPanel | null = null;
+  private panelSignature = '';
+  private panelTimer = 0;
+
+  /** Whole units of each material last seen, to pop up "+1 Rubber" when another arrives. */
+  private lastWhole = {} as Record<MaterialId, number>;
+  private readonly popupQueue: { label: string; color: number }[] = [];
+  private moneyPopupTimer = 0;
+  private materialPopupTimer = 0;
 
   constructor(private readonly ctx: AppContext) {
     super({ key: 'GarageTab' });
@@ -86,11 +105,15 @@ export class GarageScene extends Phaser.Scene {
     this.createStatsPanel(width, statsY);
     this.createPartsGrid(width, partsY);
     this.refresh();
-    this.lastWholeMaterials = Math.floor(this.ctx.model.state.resources.materials);
-    this.lastWholeRare = Math.floor(this.ctx.model.state.resources.rareMaterials);
+    this.rememberMaterials();
 
-    this.events.on(Phaser.Scenes.Events.WAKE, () => this.refresh());
-    this.input.keyboard?.on('keydown-ESC', () => this.closeModal());
+    const unsubscribe = this.ctx.model.events.on('purchased', (kind, slot) => this.onPurchased(kind, slot));
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, unsubscribe);
+    this.events.on(Phaser.Scenes.Events.WAKE, () => {
+      this.refresh();
+      this.rememberMaterials();
+    });
+    this.input.keyboard?.on('keydown-ESC', () => this.closePanel());
   }
 
   update(_time: number, deltaMs: number): void {
@@ -99,39 +122,53 @@ export class GarageScene extends Phaser.Scene {
     const rates = model.idleRates();
     this.drive.update(dt, rates.speedKmh);
 
-    const rate = `+${formatPrecise(rates.moneyPerSecond)}/s`;
-    if (this.rateText.text !== rate) this.rateText.setText(rate);
-    const trip = `${Math.round(rates.speedKmh)} km/h · ${formatDistance(model.state.stats.distanceKm)}`;
-    if (this.tripText.text !== trip) this.tripText.setText(trip);
-    const materialsRate = `+${formatPrecise(rates.materialsPerSecond * 3600)} materials/h`;
-    if (this.materialsRateText.text !== materialsRate) this.materialsRateText.setText(materialsRate);
-    const rareRate = `+${formatPrecise(rates.rareMaterialsPerSecond * 3600)} rare/h`;
-    if (this.rareRateText.text !== rareRate) this.rareRateText.setText(rareRate);
-
-    // A pop-up whenever another whole material or rare material is found.
-    const { materials, rareMaterials } = model.state.resources;
-    if (Math.floor(materials) > this.lastWholeMaterials) {
-      this.showPopup(`+${Math.floor(materials) - this.lastWholeMaterials} materials`, COLORS.materials);
+    // Overlay rates: money per second, common/uncommon materials per hour, rare finds per hour.
+    let common = 0;
+    let rare = 0;
+    for (const material of MATERIALS) {
+      const perHour = rates.materialsPerSecond[material.id] * 3600;
+      if (RARITIES[material.rarity].rank >= RARITIES.rare.rank) rare += perHour;
+      else common += perHour;
     }
-    if (Math.floor(rareMaterials) > this.lastWholeRare) {
-      this.showPopup(`+${Math.floor(rareMaterials) - this.lastWholeRare} rare!`, COLORS.rareMaterials);
-    }
-    this.lastWholeMaterials = Math.floor(materials);
-    this.lastWholeRare = Math.floor(rareMaterials);
+    this.setText(this.rateText, `+${formatPrecise(rates.moneyPerSecond)}/s`);
+    this.setText(this.tripText, `${Math.round(rates.speedKmh)} km/h · ${formatDistance(model.state.stats.distanceKm)}`);
+    this.setText(this.materialsRateText, `Materials +${formatPrecise(common)}/h`);
+    this.setText(this.rareRateText, `Rare finds +${formatPrecise(rare)}/h`);
 
-    this.popupTimer += dt;
-    if (this.popupTimer >= POPUP_INTERVAL) {
-      this.popupTimer = 0;
-      this.showMoneyPopup(rates.moneyPerSecond * POPUP_INTERVAL);
+    this.queueMaterialPopups();
+    this.materialPopupTimer += dt;
+    const next = this.popupQueue[0];
+    if (next && this.materialPopupTimer >= MATERIAL_POPUP_INTERVAL) {
+      this.popupQueue.shift();
+      this.materialPopupTimer = 0;
+      this.showPopup(next.label, next.color, 'right');
+    }
+    this.moneyPopupTimer += dt;
+    if (this.moneyPopupTimer >= MONEY_POPUP_INTERVAL) {
+      this.moneyPopupTimer = 0;
+      if (rates.moneyPerSecond > 0) this.showPopup(`+${formatPrecise(rates.moneyPerSecond)}`, COLORS.money, 'left');
+    }
+
+    // Redraw an open panel, and the part cards' badges, when anything shown has changed.
+    this.panelTimer += dt;
+    if (this.panelTimer >= PANEL_REFRESH_INTERVAL) {
+      this.panelTimer = 0;
+      const signature = panelSignature(model);
+      if (signature !== this.panelSignature) {
+        this.panelSignature = signature;
+        this.refreshCards();
+        if (this.openPanel) this.showPanel(this.openPanel);
+      }
     }
   }
 
-  /** Re-reads the car from the game state and updates every label and bar. */
+  /** Re-reads the car from the game state and updates the car, labels, bars and cards. */
   refresh(): void {
-    const car = getActiveCar(this.ctx.model.state.garage);
+    const car = this.ctx.model.activeCar;
     const model = CAR_MODELS[car.modelId];
     this.carName.setText(model?.name ?? 'Unknown car');
     this.carDescription.setText(model?.description ?? '');
+    this.drive.car.setCar(car);
 
     const stats = computeCarStats(car);
     for (const stat of STATS) {
@@ -142,19 +179,78 @@ export class GarageScene extends Phaser.Scene {
       row.fill.setSize(Math.max(row.fill.height, row.barWidth * ratio), row.fill.height);
       row.value.setText(stat.unit ? `${Math.round(value)} ${stat.unit}` : `${Math.round(value)}`);
     }
+    this.refreshCards();
+  }
 
+  private refreshCards(): void {
+    const car = this.ctx.model.activeCar;
+    const resources = this.ctx.model.state.resources;
     for (const card of this.partCards) {
       const part = getInstalledPart(car, card.slot.id);
+      const level = car.parts[card.slot.id]?.level ?? 1;
       card.name.setText(part ? part.name : 'Empty');
+      // Long names (e.g. "Race Adjustable Coilovers") shrink to stay within two lines.
+      card.name.setFontSize(25);
+      if (card.name.height > 70) card.name.setFontSize(20);
       card.name.setColor(part ? TEXT_COLORS.primary : TEXT_COLORS.muted);
       card.background.setFillStyle(part ? COLORS.panelRaised : COLORS.panel);
       card.qualityStrip.setVisible(part !== null);
-      if (part) card.qualityStrip.setFillStyle(QUALITIES[part.quality].color);
+      if (part) {
+        const color = QUALITIES[part.quality].color;
+        card.qualityStrip.setFillStyle(color);
+        card.level.setText(`${QUALITIES[part.quality].label} · Lv ${level}/${PART_LEVELS.maxLevel}`);
+        card.level.setColor(cssColor(color));
+      } else {
+        card.level.setText('');
+      }
+      // Badge: something for this slot can be bought right now.
+      const next = nextTierPart(car, card.slot.id);
+      const levelCost = part ? levelUpCost(part, level) : null;
+      const affordable =
+        (next !== null && canAfford(resources, tierCost(next))) || (levelCost !== null && canAfford(resources, levelCost));
+      card.badge.setVisible(affordable);
+    }
+  }
+
+  private onPurchased(kind: PurchaseKind, slot: SlotId | null): void {
+    const lookChanged = this.drive.car.setCar(this.ctx.model.activeCar);
+    this.refresh();
+    if (kind === 'tier' && slot) {
+      const part = getInstalledPart(this.ctx.model.activeCar, slot);
+      if (part) this.showPopup(`${part.name} installed!`, QUALITIES[part.quality].color);
+    } else if (kind === 'level' && slot) {
+      this.showPopup(`Level ${this.ctx.model.activeCar.parts[slot]?.level ?? ''}!`, COLORS.accentAlt);
+    } else if (kind === 'salvageMagnet') {
+      this.showPopup('Magnet upgraded!', COLORS.accentAlt);
+    }
+    if (lookChanged) this.cameras.main.flash(180, 255, 255, 255, false);
+    if (this.openPanel) this.showPanel(this.openPanel);
+  }
+
+  private setText(target: Phaser.GameObjects.Text, value: string): void {
+    if (target.text !== value) target.setText(value);
+  }
+
+  private rememberMaterials(): void {
+    for (const id of MATERIAL_IDS) this.lastWhole[id] = Math.floor(this.ctx.model.state.resources.materials[id]);
+  }
+
+  /** Queues a pop-up for each material that reached another whole unit. */
+  private queueMaterialPopups(): void {
+    const { materials } = this.ctx.model.state.resources;
+    for (const material of MATERIALS) {
+      const whole = Math.floor(materials[material.id]);
+      const gained = whole - (this.lastWhole[material.id] ?? whole);
+      if (gained > 0 && this.popupQueue.length < 6) {
+        this.popupQueue.push({ label: `+${gained} ${material.name}`, color: RARITIES[material.rarity].color });
+      }
+      this.lastWhole[material.id] = whole;
     }
   }
 
   private createStage(width: number, height: number): void {
-    this.drive = new DriveView(this, width, height);
+    this.drive = new DriveView(this, width, height, this.ctx.model.activeCar);
+    this.drive.car.startIdleShudder();
 
     this.carName = this.add.text(PAD, 24, '', overlayText(52, TEXT_COLORS.primary, true));
     this.carDescription = this.add.text(PAD, 88, '', {
@@ -164,37 +260,32 @@ export class GarageScene extends Phaser.Scene {
     this.rateText = this.add
       .text(width - PAD, 24, '', overlayText(48, cssColor(COLORS.money), true))
       .setOrigin(1, 0);
-    this.materialsRateText = this.add
-      .text(PAD, 132, '', overlayText(26, cssColor(COLORS.materials), true))
-      .setOrigin(0, 0);
-    this.rareRateText = this.add
-      .text(PAD, 168, '', overlayText(26, cssColor(COLORS.rareMaterials), true))
-      .setOrigin(0, 0);
     this.tripText = this.add
       .text(width - PAD, 86, '', overlayText(26, TEXT_COLORS.primary))
       .setOrigin(1, 0);
-  }
-
-  /** A "+1.07" floating up from the car and fading out. */
-  private showMoneyPopup(amount: number): void {
-    if (amount <= 0) return;
-    this.showPopup(`+${formatPrecise(amount)}`, COLORS.money);
+    this.materialsRateText = this.add
+      .text(PAD, 132, '', overlayText(26, cssColor(RARITIES.common.color), true))
+      .setOrigin(0, 0);
+    this.rareRateText = this.add
+      .text(PAD, 168, '', overlayText(26, cssColor(RARITIES.rare.color), true))
+      .setOrigin(0, 0);
   }
 
   /** Text that floats up from the car and fades out. */
-  private showPopup(label: string, color: number): void {
+  private showPopup(label: string, color: number, side: 'left' | 'center' | 'right' = 'center'): void {
     const { car, scale } = this.drive;
-    const x = car.x + Phaser.Math.Between(-60, 60);
+    const offset = side === 'left' ? -150 : side === 'right' ? 150 : 0;
+    const x = car.x + offset + Phaser.Math.Between(-40, 40);
     const y = car.y - 31 * scale - 20;
     const popup = this.add
-      .text(x, y, label, overlayText(36, cssColor(color), true))
+      .text(x, y, label, overlayText(34, cssColor(color), true))
       .setOrigin(0.5)
       .setDepth(10);
     this.tweens.add({
       targets: popup,
       y: y - 90,
       alpha: 0,
-      duration: 1100,
+      duration: 1300,
       ease: 'Cubic.easeOut',
       onComplete: () => popup.destroy(),
     });
@@ -231,10 +322,20 @@ export class GarageScene extends Phaser.Scene {
   }
 
   private createPartsGrid(width: number, y: number): void {
-    this.add.text(PAD, y, 'PARTS', text(26, TEXT_COLORS.accent, true)).setOrigin(0, 0);
+    this.add.text(PAD, y + 8, 'PARTS', text(26, TEXT_COLORS.accent, true)).setOrigin(0, 0);
+
+    // Workshop button: garage-wide upgrades.
+    const buttonWidth = 220;
+    const workshop = this.add
+      .rectangle(width - PAD - buttonWidth, y, buttonWidth, 44, COLORS.panelRaised)
+      .setOrigin(0)
+      .setRounded(14)
+      .setStrokeStyle(2, COLORS.accentAlt)
+      .setInteractive({ useHandCursor: true });
+    workshop.on('pointerup', () => this.showPanel({ kind: 'workshop' }));
     this.add
-      .text(width - PAD, y, 'Tap a part for details', text(24, TEXT_COLORS.muted))
-      .setOrigin(1, 0);
+      .text(width - PAD - buttonWidth / 2, y + 22, 'Workshop', text(24, TEXT_COLORS.primary, true))
+      .setOrigin(0.5);
 
     const cardWidth = (width - 2 * PAD - (CARD_COLUMNS - 1) * CARD_GAP) / CARD_COLUMNS;
     SLOTS.forEach((slot, i) => {
@@ -247,69 +348,39 @@ export class GarageScene extends Phaser.Scene {
         .setRounded(18)
         .setStrokeStyle(3, COLORS.panelBorder)
         .setInteractive({ useHandCursor: true });
-      background.on('pointerup', () => this.openPartDetails(slot));
+      background.on('pointerup', () => this.showPanel({ kind: 'part', slot }));
 
       const qualityStrip = this.add
-        .rectangle(x + 14, cardY + 24, 6, CARD_HEIGHT - 48, COLORS.panelBorder)
+        .rectangle(x + 14, cardY + 20, 6, CARD_HEIGHT - 40, COLORS.panelBorder)
         .setOrigin(0);
-      this.add.text(x + 32, cardY + 20, slot.label, text(22, TEXT_COLORS.secondary));
-      const name = this.add.text(x + 32, cardY + 54, '', {
-        ...text(26, TEXT_COLORS.primary, true),
+      this.add.text(x + 32, cardY + 16, slot.label, text(22, TEXT_COLORS.secondary));
+      const name = this.add.text(x + 32, cardY + 46, '', {
+        ...text(25, TEXT_COLORS.primary, true),
         wordWrap: { width: cardWidth - 48 },
       });
-      this.partCards.push({ slot, background, qualityStrip, name });
+      const level = this.add.text(x + 32, cardY + CARD_HEIGHT - 16, '', text(20, TEXT_COLORS.secondary, true)).setOrigin(0, 1);
+      const badge = this.add.circle(x + cardWidth - 18, cardY + 18, 9, COLORS.accent).setVisible(false);
+      this.partCards.push({ slot, background, qualityStrip, name, level, badge });
     });
   }
 
-  private openPartDetails(slot: SlotDef): void {
-    this.closeModal();
-    const car = getActiveCar(this.ctx.model.state.garage);
-    const part = getInstalledPart(car, slot.id);
-    const level = car.parts[slot.id]?.level ?? 1;
-    const partStats = part ? partStatsAtLevel(part, level) : {};
-
-    const lines: DialogLine[] = [
-      { text: slot.label.toUpperCase(), size: 26, color: TEXT_COLORS.accent, bold: true, gapAfter: 10 },
-      { text: part?.name ?? 'Empty slot', size: 52, color: TEXT_COLORS.primary, bold: true },
-    ];
-    if (part) {
-      const quality = QUALITIES[part.quality];
-      lines.push({ text: quality.label, size: 28, color: cssColor(quality.color), bold: true, gapAfter: 20 });
-    }
-    lines.push(
-      {
-        text: part?.description ?? `No ${slot.label.toLowerCase()} fitted yet.`,
-        size: 30,
-        color: TEXT_COLORS.secondary,
-        gapAfter: 32,
-      },
-      { text: 'ADDS TO YOUR CAR', size: 24, color: TEXT_COLORS.muted, bold: true },
-    );
-    const bonuses = STATS.filter((stat) => (partStats[stat.id] ?? 0) !== 0);
-    if (bonuses.length === 0) lines.push({ text: 'Nothing yet', size: 32, color: TEXT_COLORS.primary });
-    for (const stat of bonuses) {
-      const amount = Math.round(partStats[stat.id] ?? 0);
-      lines.push({
-        text: `+${amount}${stat.unit ? ` ${stat.unit}` : ''}  ${stat.label}`,
-        size: 32,
-        color: TEXT_COLORS.primary,
-        gapAfter: 10,
-      });
-    }
-    lines.push({ text: 'Part upgrades are coming soon.', size: 26, color: TEXT_COLORS.muted, gapAfter: 0 });
-
+  /** Opens (or redraws) a panel over the tab. */
+  private showPanel(which: OpenPanel): void {
+    this.panel?.destroy();
+    this.openPanel = which;
+    this.panelSignature = panelSignature(this.ctx.model);
     const { width, height } = this.cameras.main;
-    this.modal = openDialog(this, {
-      area: { x: 0, y: 0, width, height },
-      lines,
-      buttonLabel: 'Close',
-      onButton: () => this.closeModal(),
-      onBackdrop: () => this.closeModal(),
-    });
+    const area = { x: 0, y: 0, width, height };
+    const close = () => this.closePanel();
+    this.panel =
+      which.kind === 'part'
+        ? openPartPanel(this, this.ctx.model, which.slot, area, close)
+        : openWorkshopPanel(this, this.ctx.model, area, close);
   }
 
-  private closeModal(): void {
-    this.modal?.destroy();
-    this.modal = null;
+  private closePanel(): void {
+    this.panel?.destroy();
+    this.panel = null;
+    this.openPanel = null;
   }
 }

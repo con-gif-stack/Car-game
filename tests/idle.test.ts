@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { formatDistance, formatPrecise } from '../src/core/format';
-import { computeIdleRates, computeOfflineEarnings, rareTricklePerHour } from '../src/core/idle';
-import { computeCarStats, createStarterGarage, emptyStats, getActiveCar } from '../src/core/vehicle';
+import { computeIdleRates, computeOfflineEarnings, progressFactor, salvageMagnetMultiplier } from '../src/core/idle';
+import { carProgress, computeCarStats, createStarterGarage, emptyStats, getActiveCar } from '../src/core/vehicle';
 import { ECONOMY } from '../src/data/economy';
+import { MATERIALS, RARITIES } from '../src/data/materials';
 
 const starterRates = () => computeIdleRates(computeCarStats(getActiveCar(createStarterGarage())));
+const base = { ...emptyStats(), power: 58, efficiency: 20, grip: 16 };
 
 describe('computeIdleRates', () => {
   it('the starter car earns about 1 money per second', () => {
@@ -14,49 +16,81 @@ describe('computeIdleRates', () => {
     expect(rates.moneyPerSecond).toBeLessThan(1.1);
   });
 
+  it('the starter car finds common materials every few minutes, uncommon ones a few times an hour', () => {
+    const perHour = (id: keyof ReturnType<typeof starterRates>['materialsPerSecond']) =>
+      starterRates().materialsPerSecond[id] * 3600;
+    expect(perHour('scrapMetal')).toBeGreaterThan(10);
+    expect(perHour('rubber')).toBeGreaterThan(5);
+    expect(perHour('copperWire')).toBeGreaterThan(1);
+    expect(perHour('aluminum')).toBeGreaterThan(1);
+    expect(perHour('copperWire')).toBeLessThan(perHour('scrapMetal'));
+  });
+
+  it('Rare and above only trickle in while idle (runs are their main source)', () => {
+    for (const material of MATERIALS) {
+      if (RARITIES[material.rarity].rank < RARITIES.rare.rank) continue;
+      expect(material.idle.kind, material.id).toBe('trickle');
+      // Under one an hour even with a maxed Salvage Magnet at high progress.
+      const perHour = computeIdleRates(base, ECONOMY.salvageMagnet.maxLevel, 4).materialsPerSecond[material.id] * 3600;
+      expect(perHour, material.id).toBeLessThan(2);
+    }
+  });
+
+  it('Ceramic does not drop while idle until progress 3', () => {
+    expect(computeIdleRates(base, 0, 2).materialsPerSecond.ceramic).toBe(0);
+    expect(computeIdleRates(base, 0, 3).materialsPerSecond.ceramic).toBeGreaterThan(0);
+  });
+
+  it('every material drops more as the car progresses', () => {
+    const early = computeIdleRates(base, 0, 3);
+    const late = computeIdleRates(base, 0, 4);
+    for (const material of MATERIALS) {
+      expect(late.materialsPerSecond[material.id], material.id).toBeGreaterThan(early.materialsPerSecond[material.id]);
+    }
+    expect(progressFactor({ kind: 'trickle', perHour: 1, unlockProgress: 1, growthPerProgress: 1 }, 0.5)).toBe(0);
+  });
+
   it('more power means more speed, money and materials', () => {
-    const base = { ...emptyStats(), efficiency: 20, grip: 16 };
     const weak = computeIdleRates({ ...base, power: 50 });
     const strong = computeIdleRates({ ...base, power: 150 });
     expect(strong.speedKmh).toBeGreaterThan(weak.speedKmh);
     expect(strong.moneyPerSecond).toBeGreaterThan(weak.moneyPerSecond);
-    expect(strong.materialsPerSecond).toBeGreaterThan(weak.materialsPerSecond);
+    expect(strong.materialsPerSecond.scrapMetal).toBeGreaterThan(weak.materialsPerSecond.scrapMetal);
   });
 
-  it('fuel efficiency scales money and grip scales materials', () => {
-    const base = { ...emptyStats(), power: 58, efficiency: 20, grip: 16 };
+  it('fuel efficiency scales money and grip scales distance-based materials', () => {
     const normal = computeIdleRates(base);
     const efficient = computeIdleRates({ ...base, efficiency: 40 });
     const grippy = computeIdleRates({ ...base, grip: 32 });
     expect(efficient.moneyPerSecond).toBeCloseTo(normal.moneyPerSecond * 2);
-    expect(efficient.materialsPerSecond).toBeCloseTo(normal.materialsPerSecond);
-    expect(grippy.materialsPerSecond).toBeCloseTo(normal.materialsPerSecond * 2);
+    expect(efficient.materialsPerSecond.scrapMetal).toBeCloseTo(normal.materialsPerSecond.scrapMetal);
+    expect(grippy.materialsPerSecond.scrapMetal).toBeCloseTo(normal.materialsPerSecond.scrapMetal * 2);
+    expect(grippy.materialsPerSecond.titanium).toBeCloseTo(normal.materialsPerSecond.titanium);
   });
 
-  it('the starter car salvages about 20 materials an hour', () => {
-    const perHour = starterRates().materialsPerSecond * 3600;
-    expect(perHour).toBeGreaterThan(18);
-    expect(perHour).toBeLessThan(22);
+  it('the Salvage Magnet boosts the rare trickle, up to its max level', () => {
+    const magnetised = computeIdleRates(base, 2);
+    expect(magnetised.materialsPerSecond.titanium).toBeCloseTo(starterRates().materialsPerSecond.titanium * salvageMagnetMultiplier(2));
+    expect(magnetised.materialsPerSecond.scrapMetal).toBeCloseTo(computeIdleRates(base).materialsPerSecond.scrapMetal);
+    expect(salvageMagnetMultiplier(999)).toBe(salvageMagnetMultiplier(ECONOMY.salvageMagnet.maxLevel));
   });
 
-  it('rare materials only trickle in, faster with each Salvage Magnet level, up to its max', () => {
-    expect(rareTricklePerHour(0)).toBe(ECONOMY.rareTrickle.basePerHour);
-    expect(rareTricklePerHour(2)).toBeGreaterThan(rareTricklePerHour(1));
-    expect(rareTricklePerHour(999)).toBe(rareTricklePerHour(ECONOMY.rareTrickle.maxLevel));
-    // "Very small": under one rare material an hour even at max level.
-    expect(rareTricklePerHour(ECONOMY.rareTrickle.maxLevel)).toBeLessThan(1);
+  it('a new car has progress 0', () => {
+    expect(carProgress(getActiveCar(createStarterGarage()))).toBe(0);
   });
 });
 
 describe('computeOfflineEarnings', () => {
-  it('earns the idle rate for the time away', () => {
+  it('earns the idle rate for the time away, for money and every material', () => {
     const rates = starterRates();
     const earned = computeOfflineEarnings(rates, 3600);
+    const share = 3600 * ECONOMY.offline.efficiency;
     expect(earned.seconds).toBe(3600);
-    expect(earned.money).toBeCloseTo(rates.moneyPerSecond * 3600 * ECONOMY.offline.efficiency);
-    expect(earned.distanceKm).toBeCloseTo(rates.kmPerSecond * 3600 * ECONOMY.offline.efficiency);
-    expect(earned.materials).toBeCloseTo(rates.materialsPerSecond * 3600 * ECONOMY.offline.efficiency);
-    expect(earned.rareMaterials).toBeCloseTo(rates.rareMaterialsPerSecond * 3600 * ECONOMY.offline.efficiency);
+    expect(earned.money).toBeCloseTo(rates.moneyPerSecond * share);
+    expect(earned.distanceKm).toBeCloseTo(rates.kmPerSecond * share);
+    for (const material of MATERIALS) {
+      expect(earned.materials[material.id]).toBeCloseTo(rates.materialsPerSecond[material.id] * share);
+    }
     expect(earned.capped).toBe(false);
   });
 
@@ -69,7 +103,7 @@ describe('computeOfflineEarnings', () => {
 
   it('earns nothing for negative or invalid time', () => {
     expect(computeOfflineEarnings(starterRates(), -100).money).toBe(0);
-    expect(computeOfflineEarnings(starterRates(), Number.NaN).money).toBe(0);
+    expect(computeOfflineEarnings(starterRates(), Number.NaN).materials.scrapMetal).toBe(0);
   });
 });
 

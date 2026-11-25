@@ -32,12 +32,13 @@ The full design plan, decisions, open questions and build roadmap are in
 ## Code layout
 
 - `src/core/`: game logic and state (`GameModel`, saving, fixed-step clock, number formatting). **No Phaser imports here**, so it can be unit-tested in `tests/`.
-- `src/data/`: tunable numbers and game data (`vehicles.ts`: stats, slots, tiers and the generated part list, car models; `economy.ts`: income, rare trickle, offline earnings, tier and level costs).
-- `src/core/upgrades.ts`: upgrade rules and costs (next tier, level-ups, Salvage Magnet, spending), shared by the game and the simulator.
+- `src/data/`: tunable numbers and game data (`vehicles.ts`: stats, slots, tiers and the generated part list, car models; `materials.ts`: materials, rarities and idle drop rates; `economy.ts`: income, Salvage Magnet, offline earnings, money costs and part recipes).
+- `src/core/upgrades.ts`: upgrade rules and costs (next tier, level-ups, Salvage Magnet, spending), shared by the game and the simulator. `GameModel.buyNextTier/buyLevelUp/buySalvageMagnet` wrap them, save, and emit `purchased`.
+- Resources are `{ money, materials: Record<MaterialId, number> }`; costs are `{ money?, materials? }`.
 - `src/sim/simulate.ts`: balance simulator (no Phaser). `PLANNED_RUNS` in `economy.ts` stands in for driving-run rewards until Step 5.
 - `src/core/idle.ts`: idle income and offline earnings formulas. `GameModel` applies them on each tick and on time away (pending offline earnings are collected through `collectOffline()`).
-- `src/art/`: placeholder pixel art generated in code (`PixelGrid`, `carArt.ts` and `landscape.ts`, each with its palette). No Phaser imports here either. `src/scenes/textures.ts` turns grids into textures.
-- `src/scenes/`: Phaser scenes. `UIScene` is the always-on top bar and tab bar. Each tab is its own scene, drawn only in the content area (its camera viewport) using local coordinates. `GarageScene` is the Garage tab, `DriveView` is its scrolling idle-driving view, and `CarView` draws a car. `UIScene` shows the "Welcome back" offline-earnings dialog. Use `openDialog` (`src/scenes/dialog.ts`) for pop-up panels. `PlaceholderTabScene` stands in for tabs not built yet (wired up in `TAB_SCENES` in `src/main.ts`).
+- `src/art/`: placeholder pixel art generated in code (`PixelGrid`, `carArt.ts` with `lookForCar` for part-driven looks, `landscape.ts`, `materialIcons.ts`). No Phaser imports here either. `src/scenes/textures.ts` turns grids into textures.
+- `src/scenes/`: Phaser scenes. `UIScene` is the always-on top bar and tab bar. Each tab is its own scene, drawn only in the content area (its camera viewport) using local coordinates. `GarageScene` is the Garage tab, `DriveView` is its scrolling idle-driving view, and `CarView` draws a car. `UIScene` shows the "Welcome back" dialog and the materials Inventory. Build pop-up panels with `Panel` (`src/scenes/panel.ts`: text, icon rows, buttons with a disabled state); the part, Workshop and Inventory panels are in `src/scenes/panels.ts` and are rebuilt when `panelSignature` changes. `openDialog` is a shortcut for text plus one button. `PlaceholderTabScene` stands in for tabs not built yet (wired up in `TAB_SCENES` in `src/main.ts`).
 - Rendering uses Phaser 4's `smoothPixelArt`: draw pixel art small and scale it up by whole numbers.
 - `src/ui/`: layout, theme colours, tab list and placeholder icons.
 - Screen units: 1080 wide, with variable height (see `src/ui/layout.ts`). Tab screens must fit 1280 units of content height.

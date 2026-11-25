@@ -1,5 +1,19 @@
 import { describe, expect, it } from 'vitest';
-import { buildRustbucketBody, buildWornWheel, RUSTBUCKET_LAYOUT, RUSTBUCKET_PALETTE } from '../src/art/carArt';
+import {
+  buildBrake,
+  buildRustbucketBody,
+  buildWheel,
+  buildWornWheel,
+  lookForCar,
+  MAX_RUST_PATCHES,
+  RUSTBUCKET_LAYOUT,
+  RUSTBUCKET_PALETTE,
+} from '../src/art/carArt';
+import { emptyResources } from '../src/core/state';
+import { buyNextTier } from '../src/core/upgrades';
+import { createStarterGarage, getActiveCar } from '../src/core/vehicle';
+import { MATERIAL_IDS } from '../src/data/materials';
+import { SLOTS } from '../src/data/vehicles';
 import { PixelGrid, pointInPolygon } from '../src/art/PixelGrid';
 
 describe('PixelGrid', () => {
@@ -61,5 +75,50 @@ describe('car art', () => {
       expect(wheel.get(i, 0)).toBeNull();
       expect(wheel.get(0, i)).toBeNull();
     }
+  });
+});
+
+describe('car looks follow the installed parts', () => {
+  const rich = () => {
+    const r = emptyResources();
+    r.money = 1e12;
+    for (const id of MATERIAL_IDS) r.materials[id] = 1e12;
+    return r;
+  };
+
+  it('a new car is fully rusty, stock height, with worn wheels and no intercooler', () => {
+    const look = lookForCar(getActiveCar(createStarterGarage()));
+    expect(look).toEqual({ rustPatches: MAX_RUST_PATCHES, exhaustRank: 0, turbo: false, rideDrop: 0, wheelRank: 0, brakeRank: 0 });
+  });
+
+  it('a fully upgraded car has no rust, sits lower, and shows race parts', () => {
+    const car = getActiveCar(createStarterGarage());
+    const wallet = rich();
+    for (const slot of SLOTS) while (buyNextTier(car, slot.id, wallet));
+    expect(lookForCar(car)).toEqual({ rustPatches: 0, exhaustRank: 4, turbo: true, rideDrop: 2, wheelRank: 4, brakeRank: 4 });
+  });
+
+  it('restoring the car only removes rust, it never adds new patches', () => {
+    let previous = buildRustbucketBody(lookForCar(getActiveCar(createStarterGarage())));
+    for (const patches of [12, 6, 0]) {
+      const body = buildRustbucketBody({ rustPatches: patches, exhaustRank: 0, turbo: false, rideDrop: 0, wheelRank: 0, brakeRank: 0 });
+      const isRust = (c: number | null) => c === RUSTBUCKET_PALETTE.rust || c === RUSTBUCKET_PALETTE.rustLight || c === RUSTBUCKET_PALETTE.rustDark;
+      body.forEach((x, y, c) => {
+        if (isRust(c)) expect(isRust(previous.get(x, y))).toBe(true);
+      });
+      previous = body;
+    }
+  });
+
+  it('each wheel tier looks different, and spoked rims are see-through for the brakes', () => {
+    const wheels = [0, 1, 2, 3, 4].map((rank) => buildWheel(rank).toRgba().join(','));
+    expect(new Set(wheels).size).toBe(5);
+    const c = RUSTBUCKET_LAYOUT.wheelSize / 2;
+    let open = 0;
+    buildWheel(2).forEach((x, y, col) => {
+      if (col === null && Math.hypot(x + 0.5 - c, y + 0.5 - c) < 4) open++;
+    });
+    expect(open).toBeGreaterThan(0);
+    expect(buildBrake(2).toRgba()).not.toEqual(buildBrake(4).toRgba());
   });
 });

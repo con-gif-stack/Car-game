@@ -1,18 +1,19 @@
+import { emptyMaterials, type MaterialId } from '../data/materials';
 import { createStarterGarage, type GarageState } from './vehicle';
 
 /**
  * The save-file version. Bump it whenever the shape of GameState changes in a way that
  * needs converting old saves, and add a migration in save.ts.
  */
-export const SAVE_VERSION = 2;
+export const SAVE_VERSION = 3;
+
+export type MaterialStock = Record<MaterialId, number>;
 
 export interface Resources {
   /** Primary currency. */
   money: number;
-  /** Used for vehicle upgrades and progression. */
-  materials: number;
-  /** Used for advanced upgrades and specialized parts. */
-  rareMaterials: number;
+  /** Amount held of each material (see src/data/materials.ts). */
+  materials: MaterialStock;
 }
 
 export interface GameStats {
@@ -42,19 +43,26 @@ export interface GameState {
 }
 
 export interface WorkshopState {
-  /** Salvage Magnet level: raises the idle trickle of rare materials. */
+  /** Salvage Magnet level: boosts the idle trickle of Rare-and-above materials. */
   salvageMagnetLevel: number;
 }
 
-export interface PendingOffline {
+/** Earnings (money, materials, distance) over some period. */
+export interface Earnings {
   money: number;
-  materials: number;
-  rareMaterials: number;
+  materials: MaterialStock;
   distanceKm: number;
+}
+
+export interface PendingOffline extends Earnings {
   /** Seconds away that counted toward these earnings. */
   seconds: number;
   /** True if any absence went past the offline cap. */
   capped: boolean;
+}
+
+export function emptyResources(): Resources {
+  return { money: 0, materials: emptyMaterials() };
 }
 
 export function createNewState(now: number): GameState {
@@ -62,11 +70,7 @@ export function createNewState(now: number): GameState {
     version: SAVE_VERSION,
     createdAt: now,
     lastSavedAt: now,
-    resources: {
-      money: 0,
-      materials: 0,
-      rareMaterials: 0,
-    },
+    resources: emptyResources(),
     garage: createStarterGarage(),
     pendingOffline: emptyPendingOffline(),
     workshop: { salvageMagnetLevel: 0 },
@@ -79,5 +83,5 @@ export function createNewState(now: number): GameState {
 }
 
 export function emptyPendingOffline(): PendingOffline {
-  return { money: 0, materials: 0, rareMaterials: 0, distanceKm: 0, seconds: 0, capped: false };
+  return { money: 0, materials: emptyMaterials(), distanceKm: 0, seconds: 0, capped: false };
 }

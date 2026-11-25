@@ -2,11 +2,14 @@ import {
   ECONOMY,
   LEVEL_COSTS,
   PART_LEVELS,
+  PART_RECIPES,
   SLOT_COST_MULTIPLIERS,
-  TIER_COSTS,
+  TIER_MONEY_COSTS,
   type Cost,
   type CostCurve,
+  type MaterialAmounts,
 } from '../data/economy';
+import { MATERIAL_IDS } from '../data/materials';
 import { partId, QUALITIES, TIER_ORDER } from '../data/vehicles';
 import type { Resources } from './state';
 import { getPart, type CarState, type PartDef, type SlotId } from './vehicle';
@@ -16,29 +19,25 @@ import { getPart, type CarState, type PartDef, type SlotId } from './vehicle';
  * shared by the game and the balance simulator.
  */
 
-const RESOURCE_KEYS = ['money', 'materials', 'rareMaterials'] as const;
-
 function curve(c: CostCurve, level: number): number {
   return Math.round(c.base * c.growth ** (level - 1));
 }
 
-function scaleCost(cost: Cost, multiplier: number): Cost {
-  const result: Cost = {};
-  for (const key of RESOURCE_KEYS) {
-    const value = cost[key];
-    if (value) result[key] = Math.round(value * multiplier);
-  }
-  return result;
+/** Materials in a cost, as [id, amount] pairs with amount > 0, in display order. */
+export function costMaterials(cost: Cost): [keyof MaterialAmounts, number][] {
+  return MATERIAL_IDS.filter((id) => (cost.materials?.[id] ?? 0) > 0).map((id) => [id, cost.materials?.[id] ?? 0]);
 }
 
 export function canAfford(resources: Resources, cost: Cost): boolean {
-  return RESOURCE_KEYS.every((key) => resources[key] >= (cost[key] ?? 0));
+  if (resources.money < (cost.money ?? 0)) return false;
+  return costMaterials(cost).every(([id, amount]) => resources.materials[id] >= amount);
 }
 
 /** Takes the cost from resources. Returns false (and changes nothing) if it can't be afforded. */
 export function spend(resources: Resources, cost: Cost): boolean {
   if (!canAfford(resources, cost)) return false;
-  for (const key of RESOURCE_KEYS) resources[key] -= cost[key] ?? 0;
+  resources.money -= cost.money ?? 0;
+  for (const [id, amount] of costMaterials(cost)) resources.materials[id] -= amount;
   return true;
 }
 
@@ -57,7 +56,10 @@ export function nextTierPart(car: CarState, slot: SlotId): PartDef | null {
 /** Price of buying a part outright (replacing whatever is installed). */
 export function tierCost(part: PartDef): Cost {
   if (part.quality === 'worn') return {};
-  return scaleCost(TIER_COSTS[part.quality], SLOT_COST_MULTIPLIERS[part.slot]);
+  return {
+    money: Math.round(TIER_MONEY_COSTS[part.quality] * SLOT_COST_MULTIPLIERS[part.slot]),
+    materials: { ...PART_RECIPES[part.slot][part.quality] },
+  };
 }
 
 /** Price of levelling the installed part from `level` to `level + 1`, or null at max level. */
@@ -67,10 +69,16 @@ export function levelUpCost(part: PartDef, level: number): Cost | null {
 }
 
 /** Price of raising the Salvage Magnet from `level` to `level + 1`, or null at max level. */
-export function rareTrickleUpgradeCost(level: number): Cost | null {
-  const t = ECONOMY.rareTrickle;
-  if (level >= t.maxLevel) return null;
-  return { money: curve(t.cost.money, level + 1), materials: curve(t.cost.materials, level + 1) };
+export function salvageMagnetCost(level: number): Cost | null {
+  const m = ECONOMY.salvageMagnet;
+  if (level >= m.maxLevel) return null;
+  return {
+    money: curve(m.cost.money, level + 1),
+    materials: {
+      scrapMetal: curve(m.cost.scrapMetal, level + 1),
+      copperWire: curve(m.cost.copperWire, level + 1),
+    },
+  };
 }
 
 /** Buys and installs the next tier for a slot, at level 1. Returns false if not possible. */

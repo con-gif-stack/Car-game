@@ -1,5 +1,5 @@
 import { PART_LEVELS } from '../data/economy';
-import { CAR_MODELS, PARTS, SLOTS, STARTER_MODEL_ID, STATS } from '../data/vehicles';
+import { CAR_MODELS, PARTS, QUALITIES, SLOTS, STARTER_MODEL_ID, STATS } from '../data/vehicles';
 
 export type StatId = 'power' | 'grip' | 'handling' | 'efficiency' | 'durability';
 export type SlotId =
@@ -122,6 +122,19 @@ export function computeCarStats(car: CarState): StatBlock {
     for (const stat of STATS) stats[stat.id] += add[stat.id] ?? 0;
   }
   return stats;
+}
+
+/**
+ * How far the car has progressed: the average tier rank across all slots
+ * (0 = all Worn or empty, 4 = all Race). Rarer materials drop more as this rises.
+ */
+export function carProgress(car: CarState): number {
+  let total = 0;
+  for (const slot of SLOTS) {
+    const part = getPart(car.parts[slot.id]?.partId);
+    total += part ? QUALITIES[part.quality].rank : 0;
+  }
+  return total / SLOTS.length;
 }
 
 export function createCar(id: string, modelId: string): CarState {

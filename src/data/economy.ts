@@ -1,15 +1,17 @@
 import type { QualityId, SlotId, StatId } from '../core/vehicle';
+import type { MaterialId } from './materials';
 
 /*
  * Economy numbers: what the car earns and what upgrades cost.
  * Placeholders, tuned with `npm run simulate` against the one-week rule. Change them here, not in code.
  */
 
-/** A price in one or more resources. Missing = free in that resource. */
+export type MaterialAmounts = Partial<Record<MaterialId, number>>;
+
+/** A price in money and/or materials. Missing = free in that resource. */
 export interface Cost {
   money?: number;
-  materials?: number;
-  rareMaterials?: number;
+  materials?: MaterialAmounts;
 }
 
 /** Cost that grows each level: base × growth^(level − 1). */
@@ -35,22 +37,21 @@ export const ECONOMY = {
     moneyPerKm: 90,
     /** Better fuel efficiency = more money per km. */
     moneyScaling: { stat: 'efficiency', reference: 20 } as StatScaling,
-    /** Materials salvaged per km for the starter car (~20 per hour). */
-    materialsPerKm: 0.5,
-    /** Better grip reaches more roadside scrap = more materials per km. */
+    /** Better grip reaches more roadside scrap = more distance-based materials per km. */
     materialsScaling: { stat: 'grip', reference: 16 } as StatScaling,
   },
   /**
-   * A very small idle trickle of rare materials (runs are the main source, from Step 5).
-   * Upgraded with the Salvage Magnet.
+   * The Salvage Magnet boosts the idle trickle of Rare-and-above materials
+   * (runs are their main source, from Step 5).
    */
-  rareTrickle: {
-    basePerHour: 0.1,
-    perLevelPerHour: 0.05,
+  salvageMagnet: {
+    /** Each level adds this share of the base trickle (level 10 = ×6). */
+    bonusPerLevel: 0.5,
     maxLevel: 10,
     cost: {
       money: { base: 400, growth: 2.3 } as CostCurve,
-      materials: { base: 40, growth: 2.1 } as CostCurve,
+      scrapMetal: { base: 30, growth: 2 } as CostCurve,
+      copperWire: { base: 6, growth: 2 } as CostCurve,
     },
   },
   offline: {
@@ -70,12 +71,69 @@ export const PART_LEVELS = {
   bonusPerLevel: 0.1,
 };
 
-/** Price of buying each tier of part (replacing the one installed). Worn parts are never bought. */
-export const TIER_COSTS: Record<Exclude<QualityId, 'worn'>, Cost> = {
-  used: { money: 600, materials: 60 },
-  street: { money: 9_000, materials: 450, rareMaterials: 3 },
-  sport: { money: 110_000, materials: 3_200, rareMaterials: 14 },
-  race: { money: 1_300_000, materials: 22_000, rareMaterials: 60 },
+type BuyableTier = Exclude<QualityId, 'worn'>;
+
+/** Money price of buying each tier of part, before the slot multiplier. */
+export const TIER_MONEY_COSTS: Record<BuyableTier, number> = {
+  used: 600,
+  street: 9_000,
+  sport: 110_000,
+  race: 1_560_000,
+};
+
+/**
+ * Materials needed to build each part, chosen to match what the real part is made of.
+ * Rare materials appear from Street (in a few slots), Epic Ceramic from Sport.
+ */
+export const PART_RECIPES: Record<SlotId, Record<BuyableTier, MaterialAmounts>> = {
+  engine: {
+    used: { scrapMetal: 40, copperWire: 6, aluminum: 6 },
+    street: { scrapMetal: 250, aluminum: 50, copperWire: 40, titanium: 2 },
+    sport: { scrapMetal: 3000, aluminum: 600, copperWire: 500, titanium: 48 },
+    race: { scrapMetal: 24000, aluminum: 5400, copperWire: 4500, titanium: 234, ceramic: 57 },
+  },
+  transmission: {
+    used: { scrapMetal: 30, aluminum: 4 },
+    street: { scrapMetal: 180, aluminum: 40 },
+    sport: { scrapMetal: 2000, aluminum: 500 },
+    race: { scrapMetal: 15000, aluminum: 3900, carbonFiber: 117 },
+  },
+  tires: {
+    used: { rubber: 30, scrapMetal: 10 },
+    street: { rubber: 220, scrapMetal: 40 },
+    sport: { rubber: 2600, scrapMetal: 400 },
+    race: { rubber: 21000, carbonFiber: 99 },
+  },
+  suspension: {
+    used: { scrapMetal: 25, rubber: 10 },
+    street: { scrapMetal: 150, rubber: 60, aluminum: 30 },
+    sport: { scrapMetal: 1600, rubber: 600, aluminum: 400, titanium: 26 },
+    race: { scrapMetal: 12000, rubber: 4500, aluminum: 3000, titanium: 156 },
+  },
+  brakes: {
+    used: { scrapMetal: 30 },
+    street: { scrapMetal: 180, copperWire: 30 },
+    sport: { scrapMetal: 1800, copperWire: 300, ceramic: 9 },
+    race: { scrapMetal: 12000, carbonFiber: 117, ceramic: 78 },
+  },
+  exhaust: {
+    used: { scrapMetal: 25 },
+    street: { scrapMetal: 160 },
+    sport: { scrapMetal: 1800, titanium: 33 },
+    race: { scrapMetal: 15000, titanium: 195 },
+  },
+  turbo: {
+    used: { aluminum: 8, copperWire: 6, scrapMetal: 20 },
+    street: { aluminum: 60, copperWire: 40, titanium: 3 },
+    sport: { aluminum: 800, copperWire: 500, titanium: 59 },
+    race: { aluminum: 6600, titanium: 260, ceramic: 57 },
+  },
+  fuelSystem: {
+    used: { rubber: 15, copperWire: 4 },
+    street: { rubber: 100, copperWire: 30, aluminum: 25 },
+    sport: { rubber: 1200, copperWire: 300, aluminum: 300 },
+    race: { rubber: 9000, copperWire: 2400, aluminum: 2400, carbonFiber: 78 },
+  },
 };
 
 /** Money price of levelling a part of each tier, from level 1 to 2; later levels cost more. */
@@ -87,7 +145,7 @@ export const LEVEL_COSTS: Record<QualityId, CostCurve> = {
   race: { base: 800_000, growth: 1.7 },
 };
 
-/** Some slots are pricier than others. Multiplies both tier and level costs. */
+/** Some slots are pricier than others. Multiplies money costs (tiers and levels). */
 export const SLOT_COST_MULTIPLIERS: Record<SlotId, number> = {
   engine: 1.5,
   transmission: 1.1,
@@ -101,12 +159,17 @@ export const SLOT_COST_MULTIPLIERS: Record<SlotId, number> = {
 
 /**
  * ASSUMPTION used only by the balance simulator until driving runs exist (Step 5):
- * how many rare materials runs give per day. Step 5 replaces this with real run rewards.
+ * what each run gives. Step 5 replaces this with real run rewards.
  */
 export const PLANNED_RUNS = {
   runsPerDay: 2,
-  /** Rare materials per run for the starter car. */
-  rarePerRun: 2,
-  /** Rewards grow with the car: × (power / 58) ^ this. */
+  /** Rare-and-above materials per run for the starter car. */
+  materialsPerRun: { titanium: 1.2, carbonFiber: 0.8 } as MaterialAmounts,
+  /** Ceramic per run, once progress reaches `ceramicFromProgress`. */
+  ceramicPerRun: 0.6,
+  ceramicFromProgress: 2,
+  /** Rewards grow with the car: × (power / 58) ^ this … */
   powerExponent: 0.6,
+  /** … and × (1 + this × progress). */
+  progressBonus: 0.3,
 };
