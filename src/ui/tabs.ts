@@ -7,8 +7,8 @@ export interface TabDef {
   sceneKey: string;
   /** One-line purpose, from the design doc (section 6, Primary Game Tabs). */
   description: string;
-  /** The roadmap step that builds this tab, shown until it exists. */
-  plannedStep: string;
+  /** The roadmap step that builds this tab, shown on its placeholder until it exists. */
+  plannedStep?: string;
 }
 
 /** The four main tabs, in tab-bar order. */
@@ -18,7 +18,6 @@ export const TABS: readonly TabDef[] = [
     label: 'Garage',
     sceneKey: 'GarageTab',
     description: 'Vehicle upgrades and customization.',
-    plannedStep: 'Step 1 · Basic vehicle and garage',
   },
   {
     id: 'driving',

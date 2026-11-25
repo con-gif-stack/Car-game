@@ -42,6 +42,7 @@ export class PlaceholderTabScene extends Phaser.Scene {
       })
       .setOrigin(0.5);
 
+    if (!this.tab.plannedStep) return;
     this.add
       .rectangle(cx, cy + 75, content.width - 160, 150, COLORS.panel)
       .setRounded(24)

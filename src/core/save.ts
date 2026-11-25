@@ -1,4 +1,5 @@
 import { createNewState, SAVE_VERSION, type GameState } from './state';
+import { repairGarage } from './vehicle';
 
 /** The subset of the browser's localStorage that saving needs. Swappable for tests or native storage. */
 export interface KeyValueStorage {
@@ -92,6 +93,8 @@ export function parseSave(raw: string, now: number): GameState | null {
     if (!isRecord(parsed)) return null;
     const migrated = migrate(parsed);
     const state = conformTo(createNewState(now), migrated);
+    // conformTo can't check list contents, so the garage is validated separately.
+    state.garage = repairGarage(migrated.garage);
     state.version = SAVE_VERSION;
     return state;
   } catch {

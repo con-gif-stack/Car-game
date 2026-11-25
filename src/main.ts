@@ -2,10 +2,11 @@ import Phaser from 'phaser';
 import { GameModel } from './core/GameModel';
 import { MemoryStorage, SaveManager, type KeyValueStorage } from './core/save';
 import type { AppContext } from './scenes/context';
+import { GarageScene } from './scenes/GarageScene';
 import { PlaceholderTabScene } from './scenes/PlaceholderTabScene';
 import { UIScene } from './scenes/UIScene';
 import { computeGameHeight, computeLayout, GAME_WIDTH } from './ui/layout';
-import { TABS } from './ui/tabs';
+import { TABS, type TabId } from './ui/tabs';
 import { COLORS } from './ui/theme';
 
 function getStorage(): KeyValueStorage {
@@ -18,6 +19,11 @@ function getStorage(): KeyValueStorage {
     return new MemoryStorage();
   }
 }
+
+/** Tabs that have a real screen; the rest show a placeholder. */
+const TAB_SCENES: Partial<Record<TabId, (ctx: AppContext) => Phaser.Scene>> = {
+  garage: (ctx) => new GarageScene(ctx),
+};
 
 const now = () => Date.now();
 const saves = new SaveManager(getStorage(), now);
@@ -38,7 +44,17 @@ const game = new Phaser.Game({
     width,
     height,
   },
-  scene: [new UIScene(ctx), ...TABS.map((tab) => new PlaceholderTabScene(ctx, tab))],
+  render: {
+    // Big, scaled-up pixels with smooth edges; lets pixel sprites move, scale and rotate cleanly.
+    smoothPixelArt: true,
+  },
+  scene: [
+    new UIScene(ctx),
+    ...TABS.map((tab) => {
+      const build = TAB_SCENES[tab.id];
+      return build ? build(ctx) : new PlaceholderTabScene(ctx, tab);
+    }),
+  ],
 });
 
 // Drive the game logic from Phaser's frame loop, and save whenever the page is hidden or closed.

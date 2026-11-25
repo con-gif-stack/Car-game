@@ -406,6 +406,9 @@ Make players feel like they are constantly building something. Every upgrade sho
 | 2026-11-25 | Engine version | **Phaser 4** instead of Phaser 3. Phaser 3's last release was in May 2025. Phaser 4 has been stable since April 2026, has a faster renderer, and has better lighting effects (useful for section 7's "strong lighting and environmental effects"). The basic API is the same. |
 | 2026-11-25 | Screen size | The game is **1080 units wide**, and its height follows the phone's shape (1.5 to 2.44 times the width), so it fills the screen. Desktop shows a typical 19.5:9 phone shape. Each tab screen must fit in a content area at least **1280 units tall**, between the top bar (150) and the tab bar (190). |
 | 2026-11-25 | Saving | Progress is saved **on the device**: every 10 seconds, and whenever the game is hidden or closed. The previous save is kept as a backup in case one is damaged. Saves carry a version number, so older saves can be converted when the game changes. Cloud saves are still Open Question 6. |
+| 2026-11-25 | Car stats and parts | Cars have five stats: **Power (hp), Grip, Handling, Fuel Efficiency and Durability**. A car's stats are its body's base stats plus everything its parts add. There are **eight part slots**, following section 3A: Engine, Transmission, Tires, Suspension, Brakes, Exhaust, Turbo and Fuel System. Slots can be empty; the starter car has no turbo. All numbers are placeholders until Steps 3–4. |
+| 2026-11-25 | Starter car | **"Rustbucket"**: an old, rusty hatchback (original design) with worn stock parts. It shows about 58 hp, with every stat bar under a quarter full. |
+| 2026-11-25 | Art style references | Three references were shared (see **Art Style Notes** below). Placeholder art is generated in code from a colour palette, so it can be retuned to match. |
 | 2026-11-25 | Big numbers | Amounts use standard JavaScript numbers (up to about 10^308). They display as 1.23K, 45.6M and so on up to Dc, then aa, ab, and onwards. Revisit only if the economy ever needs larger numbers. |
 
 ## Open Questions
@@ -418,15 +421,28 @@ These need answers before the build step in brackets. When one is resolved, move
 4. **Driving run controls.** What does the player actually do during a run: steering, throttle and brake timing, dodging hazards, choosing routes? *(before Step 5)*
 5. **Offline earnings cap.** How many hours of income build up while the player is away? Placeholder: **8 hours**, kept in config and upgradable later. *(Step 2, using the placeholder)*
 6. **Cloud saves and cheating.** Saves start out on the device. Cloud saves or accounts will be needed for purchases and for switching phones. Daily run limits and offline earnings can be cheated by changing the phone's clock, which is acceptable early on but needs a decision before release. *(before release)*
-7. **Art.** The two art-style reference images haven't been shared yet, and it's undecided who produces the final pixel art. Simple placeholder art is used until then. *(any time)*
+7. **Art.** The style references are in (see Art Style Notes). Still open: who produces the final pixel art, and how the references' calm sunset and daylight landscapes fit the "dark underground street racing" mood in section 8. For example, biomes could use the landscape style while the garage and menus keep a night-time neon look. Placeholder art is used until then. *(before final art; mood question before Step 6)*
 8. **Build specialization.** How do builds specialize so that several are viable, not one best setup? For example, some biomes could have materials that only off-road builds can farm efficiently. *(before Step 4 / Step 6)*
+
+## Art Style Notes
+
+Three reference images were shared in chat on 2026-11-25. They are style references only: all vehicles and places stay original designs.
+
+1. **Sunset mountain lake.** Chunky, painterly pixel art. Pink and peach clouds against soft blues, a deep navy treeline, and a snow-capped peak mirrored in still water. Limited palette, with colour built up in clusters and bands rather than smooth gradients. Calm, atmospheric.
+2. **Daytime mountain lake with a canoe.** Higher-detail pixel landscape with clear depth layers: grass and rocks in front, a pine forest in the middle, snowy peaks and soft clouds behind. Rich greens and blues, bright daylight.
+3. **Side-view sports coupe.** Clean, readable car sprite, about 110 pixels long. Flat colours with 2–3 shades per material, a darker shade of the body colour along the top edges, near-black underneath and in the windows, small bright details (tail light), and bold contrasting rims (orange on light blue).
+
+**What this means for the game:**
+- **Environments:** layered scenes (good for scrolling backgrounds while driving), atmospheric skies, and reflections. Each biome gets its own strong palette.
+- **Cars:** readable side views with few shades and bold accent colours on parts such as rims, so installed upgrades are easy to spot. The placeholder Rustbucket already follows the outline approach (soft top edge, dark underside).
+- **To add the images to the repo:** put them in `docs/art-references/`, e.g. by uploading through GitHub.
 
 ## Build Roadmap
 
 The game is built one step at a time. Each step should leave a playable, testable game. Check a step off when it's done.
 
 - [x] **Step 0: Project setup.** Vite + TypeScript + Phaser 4 project, portrait screen scaling for phones and desktop browsers, bottom tab bar (Garage / Driving / Progression / World), save/load to the device (localStorage), main game tick, and formatting for large numbers.
-- [ ] **Step 1: Basic vehicle and garage.** The rusty starter car shown in the garage, its part slots, and a vehicle stats panel. *(Priority 1)*
+- [x] **Step 1: Basic vehicle and garage.** The rusty starter car shown in the garage, its part slots, and a vehicle stats panel. *(Priority 1)*
 - [ ] **Step 2: Idle driving and resource generation.** The car drives constantly and earns over time, based on its stats. Offline earnings build up while away, up to the cap, and are collected on return. *(Priority 2)*
 - [ ] **Step 3: Currency and material economy.** Money, materials and rare materials. All costs and earnings live in data files, not code. Also a **balance simulator** script that reports how long each upgrade and milestone takes, to check the one-week rule in section 5. *(Priority 3)*
 - [ ] **Step 4: Basic vehicle upgrades.** Start with engine, tires and fuel system: upgrade levels, rising costs, stat effects and visible part changes on the car. *(Priority 4)*

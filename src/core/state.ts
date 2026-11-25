@@ -1,3 +1,5 @@
+import { createStarterGarage, type GarageState } from './vehicle';
+
 /**
  * The save-file version. Bump it whenever the shape of GameState changes in a way that
  * needs converting old saves, and add a migration in save.ts.
@@ -28,6 +30,8 @@ export interface GameState {
   /** When the game was last saved (ms since epoch). Used to work out time away. */
   lastSavedAt: number;
   resources: Resources;
+  /** The player's cars and which one is in use. */
+  garage: GarageState;
   stats: GameStats;
 }
 
@@ -41,6 +45,7 @@ export function createNewState(now: number): GameState {
       materials: 0,
       rareMaterials: 0,
     },
+    garage: createStarterGarage(),
     stats: {
       playTimeSeconds: 0,
       sessions: 0,
