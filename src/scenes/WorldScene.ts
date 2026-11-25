@@ -8,12 +8,13 @@ import { COLORS, TEXT_COLORS } from '../ui/theme';
 import type { AppContext } from './context';
 import { textStyle } from './textStyles';
 import { materialIconKey } from './textures';
+import { addFrame, PixelBar, uiIconKey } from './ui';
 
 const PAD = 32;
 const CARD_HEIGHT = 196;
 const CARD_GAP = 18;
 const MILESTONE_ROW = 84;
-const GREEN = '#6fe08a';
+const GREEN = TEXT_COLORS.good;
 
 /**
  * World tab: the biome road map (which biomes are unlocked, how far the best run got) and the
@@ -99,13 +100,14 @@ export class WorldScene extends Phaser.Scene {
             ? `${Math.min(current, target)} / ${target} runs`
             : `${Math.min(current, target)} / ${target} parts`;
       items.push(
+        addFrame(this, PAD, y, width - 2 * PAD, MILESTONE_ROW - 12, { kind: 'card', color: done ? COLORS.money : COLORS.panelBorder }).setAlpha(
+          done ? 1 : 0.75,
+        ),
         this.add
-          .rectangle(PAD, y, width - 2 * PAD, MILESTONE_ROW - 12, done ? COLORS.panelRaised : COLORS.panel)
-          .setOrigin(0)
-          .setRounded(16)
-          .setStrokeStyle(2, done ? 0x3d7a4f : COLORS.panelBorder),
-        this.add.text(PAD + 24, y + 12, `${done ? '✓' : '○'}  ${milestone.title}`, textStyle(28, done ? GREEN : TEXT_COLORS.primary, true)),
-        this.add.text(PAD + 24, y + 44, milestone.description, textStyle(20, TEXT_COLORS.secondary)),
+          .image(PAD + 44, y + (MILESTONE_ROW - 12) / 2, uiIconKey(this, done ? 'star' : 'flag', done ? undefined : 0x6a6490))
+          .setScale(3),
+        this.add.text(PAD + 84, y + 10, milestone.title, textStyle(27, done ? TEXT_COLORS.warm : TEXT_COLORS.primary, true)),
+        this.add.text(PAD + 84, y + 42, milestone.description, textStyle(20, TEXT_COLORS.secondary)),
         this.add
           .text(width - PAD - 24, y + 14, done ? 'Done' : progress, textStyle(24, done ? GREEN : TEXT_COLORS.secondary, true))
           .setOrigin(1, 0),
@@ -128,11 +130,7 @@ export class WorldScene extends Phaser.Scene {
     const objs: Phaser.GameObjects.GameObject[] = [];
 
     objs.push(
-      this.add
-        .rectangle(x, y, width, CARD_HEIGHT, unlocked ? COLORS.panelRaised : COLORS.panel)
-        .setOrigin(0)
-        .setRounded(20)
-        .setStrokeStyle(3, here ? COLORS.accent : COLORS.panelBorder),
+      addFrame(this, x, y, width, CARD_HEIGHT, { kind: 'panel', color: here ? COLORS.accentWarm : unlocked ? COLORS.panelBorder : 0x2a2448 }),
     );
     // A strip of the biome's sky colours, dimmed while locked.
     const stripWidth = 26;
@@ -141,7 +139,7 @@ export class WorldScene extends Phaser.Scene {
     sky.forEach((color, i) => {
       objs.push(
         this.add
-          .rectangle(x + 14, y + 12 + i * bandHeight, stripWidth, Math.ceil(bandHeight), color, unlocked ? 1 : 0.3)
+          .rectangle(x + 16, y + 12 + i * bandHeight, stripWidth, Math.ceil(bandHeight), color, unlocked ? 1 : 0.3)
           .setOrigin(0),
       );
     });
@@ -160,14 +158,14 @@ export class WorldScene extends Phaser.Scene {
     );
 
     const status = here
-      ? '● Your best run got this far'
+      ? '> Your best run got this far'
       : unlocked
         ? 'Unlocked'
         : reached
           ? 'Reached · more to discover soon'
           : `Locked · reach ${formatDistance(biome.startKm)}`;
     objs.push(
-      this.add.text(left, y + CARD_HEIGHT - 44, status, textStyle(22, here ? TEXT_COLORS.accent : unlocked ? GREEN : TEXT_COLORS.muted, true)),
+      this.add.text(left, y + CARD_HEIGHT - 52, status, textStyle(22, here ? TEXT_COLORS.warm : unlocked ? GREEN : TEXT_COLORS.muted, true)),
     );
 
     // Materials found here (on runs now; on its farm from Step 8).
@@ -175,7 +173,7 @@ export class WorldScene extends Phaser.Scene {
     found.forEach((id, i) => {
       objs.push(
         this.add
-          .image(x + width - 20 - (found.length - i) * 42, y + CARD_HEIGHT - 32, materialIconKey(this, id))
+          .image(x + width - 20 - (found.length - i) * 42, y + CARD_HEIGHT - 40, materialIconKey(this, id))
           .setOrigin(0, 0.5)
           .setScale(3)
           .setAlpha(unlocked ? 1 : 0.35),
@@ -185,11 +183,9 @@ export class WorldScene extends Phaser.Scene {
     // How far through this biome the best run got.
     if (Number.isFinite(biome.endKm)) {
       const ratio = Phaser.Math.Clamp((best - biome.startKm) / (biome.endKm - biome.startKm), 0, 1);
-      const barY = y + CARD_HEIGHT - 10;
-      objs.push(this.add.rectangle(left, barY, width - (left - x) - 20, 6, COLORS.panelBorder).setOrigin(0, 0.5));
-      if (ratio > 0) {
-        objs.push(this.add.rectangle(left, barY, (width - (left - x) - 20) * ratio, 6, here ? COLORS.accent : 0x6fe08a).setOrigin(0, 0.5));
-      }
+      const bar = new PixelBar(this, left, y + CARD_HEIGHT - 18, width - (left - x) - 24, 16, here ? COLORS.accentWarm : COLORS.good);
+      bar.set(ratio);
+      objs.push(...bar.objects);
     }
     return objs;
   }

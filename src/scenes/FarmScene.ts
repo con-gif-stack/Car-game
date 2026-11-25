@@ -14,6 +14,7 @@ import { cssColor } from './panel';
 import { openDroneBayPanel, panelSignature } from './panels';
 import { overlayStyle, textStyle } from './textStyles';
 import { ensureGridTexture } from './textures';
+import { addButton, addDot, addFrame, PixelBar, type PixelButton } from './ui';
 
 const PAD = 32;
 /** Height of the info panel under the map. */
@@ -63,12 +64,9 @@ export class FarmScene extends Phaser.Scene {
   private titleText!: Phaser.GameObjects.Text;
   private mainText!: Phaser.GameObjects.Text;
   private subText!: Phaser.GameObjects.Text;
-  private progressFill!: Phaser.GameObjects.Rectangle;
-  private progressBack!: Phaser.GameObjects.Rectangle;
-  private progressWidth = 0;
-  private bayButton!: Phaser.GameObjects.Rectangle;
-  private bayLabel!: Phaser.GameObjects.Text;
-  private bayDot!: Phaser.GameObjects.Arc;
+  private progress!: PixelBar;
+  private bayButton!: PixelButton;
+  private bayDot!: Phaser.GameObjects.Image;
 
   private panel: Phaser.GameObjects.Container | null = null;
   private panelSignature = '';
@@ -273,36 +271,24 @@ export class FarmScene extends Phaser.Scene {
 
   private createInfoPanel(width: number, top: number): void {
     const y = top + 16;
-    this.add
-      .rectangle(PAD, y, width - 2 * PAD, PANEL_HEIGHT - 28, COLORS.panel)
-      .setOrigin(0)
-      .setRounded(24)
-      .setStrokeStyle(3, COLORS.panelBorder)
-      .setDepth(6000);
+    addFrame(this, PAD, y, width - 2 * PAD, PANEL_HEIGHT - 28).setDepth(6000);
     const left = PAD + 32;
-    this.titleText = this.add.text(left, y + 24, '', textStyle(24, TEXT_COLORS.accent, true)).setDepth(6001);
-    this.mainText = this.add.text(left, y + 56, '', textStyle(40, TEXT_COLORS.primary, true)).setDepth(6001);
+    this.titleText = this.add.text(left, y + 26, '', textStyle(24, TEXT_COLORS.warm, true)).setDepth(6001);
+    this.mainText = this.add.text(left, y + 56, '', textStyle(38, TEXT_COLORS.primary, true)).setDepth(6001);
     this.subText = this.add
-      .text(left, y + 110, '', { ...textStyle(26, TEXT_COLORS.secondary), wordWrap: { width: width - 2 * PAD - 64 } })
+      .text(left, y + 110, '', { ...textStyle(24, TEXT_COLORS.secondary), wordWrap: { width: width - 2 * PAD - 64 } })
       .setDepth(6001);
-    this.progressWidth = width - 2 * PAD - 64;
-    this.progressBack = this.add.rectangle(left, y + 186, this.progressWidth, 14, COLORS.panelRaised).setOrigin(0, 0.5).setRounded(7).setDepth(6001);
-    this.progressFill = this.add.rectangle(left, y + 186, 14, 14, COLORS.accent).setOrigin(0, 0.5).setRounded(7).setDepth(6002);
+    this.progress = new PixelBar(this, left, y + 188, width - 2 * PAD - 64, 24, COLORS.accentWarm, { segment: 8 });
+    for (const obj of this.progress.objects) obj.setDepth(6001);
 
     const buttonWidth = 260;
-    this.bayButton = this.add
-      .rectangle(width - PAD - 32 - buttonWidth, y + 40, buttonWidth, 84, COLORS.panelRaised)
-      .setOrigin(0)
-      .setRounded(20)
-      .setStrokeStyle(3, COLORS.accentAlt)
-      .setDepth(6001)
-      .setInteractive({ useHandCursor: true });
-    this.bayButton.on('pointerup', () => this.showDroneBay());
-    this.bayLabel = this.add
-      .text(width - PAD - 32 - buttonWidth / 2, y + 82, 'Drone Bay', textStyle(30, TEXT_COLORS.primary, true))
-      .setOrigin(0.5)
-      .setDepth(6002);
-    this.bayDot = this.add.circle(width - PAD - 32 - 14, y + 52, 10, COLORS.accent).setDepth(6003).setVisible(false);
+    const buttonX = width - PAD - 32 - buttonWidth / 2;
+    this.bayButton = addButton(this, buttonX, y + 82, buttonWidth, 88, 'Drone Bay', {
+      onClick: () => this.showDroneBay(),
+      tone: 'secondary',
+      fontSize: 30,
+    }).setDepth(6001);
+    this.bayDot = addDot(this, buttonX + buttonWidth / 2 - 10, y + 44).setDepth(6003).setVisible(false);
   }
 
   private refreshInfo(): void {
@@ -330,8 +316,7 @@ export class FarmScene extends Phaser.Scene {
     this.titleText.setText('DRONES');
     this.mainText.setText(`${farm.droneCount} × ${model?.name ?? 'Drone'}`);
     this.subText.setText(`+${formatPrecise(units * 3600)} materials/h · +${formatPrecise(rates.money * 3600)} money/h. Tap piles to help out.`);
-    this.progressBack.setVisible(false);
-    this.progressFill.setVisible(false);
+    this.progress.setVisible(false);
     this.setBayVisible(true);
 
     const resources = state.resources;
@@ -341,16 +326,13 @@ export class FarmScene extends Phaser.Scene {
   }
 
   private setProgress(ratio: number): void {
-    const r = Phaser.Math.Clamp(ratio, 0, 1);
-    this.progressBack.setVisible(true);
-    this.progressFill.setVisible(r > 0);
-    this.progressFill.setSize(Math.max(14, this.progressWidth * r), 14);
+    this.progress.setVisible(true);
+    this.progress.set(ratio);
   }
 
   private setBayVisible(visible: boolean): void {
     this.bayButton.setVisible(visible);
-    if (this.bayButton.input) this.bayButton.input.enabled = visible;
-    this.bayLabel.setVisible(visible);
+    if (this.bayButton.background.input) this.bayButton.background.input.enabled = visible;
     if (!visible) this.bayDot.setVisible(false);
   }
 
@@ -382,10 +364,11 @@ export class FarmScene extends Phaser.Scene {
   }
 
   private showDroneBay(): void {
+    const animate = this.panel === null;
     this.panel?.destroy();
     this.panelSignature = panelSignature(this.ctx.model);
     const { width, height } = this.cameras.main;
-    this.panel = openDroneBayPanel(this, this.ctx.model, { x: 0, y: 0, width, height }, () => this.closePanel());
+    this.panel = openDroneBayPanel(this, this.ctx.model, { x: 0, y: 0, width, height }, () => this.closePanel(), animate);
     this.panel.setDepth(10000);
   }
 

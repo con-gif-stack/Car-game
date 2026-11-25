@@ -1,7 +1,9 @@
 import Phaser from 'phaser';
 import type { TabDef } from '../ui/tabs';
-import { COLORS, FONT_FAMILY, TEXT_COLORS } from '../ui/theme';
+import { TEXT_COLORS, UI_PIXEL } from '../ui/theme';
 import type { AppContext } from './context';
+import { overlayStyle, textStyle, wrapStyle } from './textStyles';
+import { addFrame, uiIconKey } from './ui';
 
 /**
  * Stand-in screen for a tab that hasn't been built yet. Each roadmap step replaces one of
@@ -23,44 +25,13 @@ export class PlaceholderTabScene extends Phaser.Scene {
     const cx = content.width / 2;
     const cy = content.height / 2;
 
-    this.add
-      .text(cx, cy - 170, this.tab.label, {
-        fontFamily: FONT_FAMILY,
-        fontSize: '88px',
-        fontStyle: 'bold',
-        color: TEXT_COLORS.primary,
-      })
-      .setOrigin(0.5);
-
-    this.add
-      .text(cx, cy - 80, this.tab.description, {
-        fontFamily: FONT_FAMILY,
-        fontSize: '36px',
-        color: TEXT_COLORS.secondary,
-        align: 'center',
-        wordWrap: { width: content.width - 160 },
-      })
-      .setOrigin(0.5);
+    this.add.image(cx, cy - 280, uiIconKey(this, this.tab.id, 0x8a84b4)).setScale(UI_PIXEL * 1.5);
+    this.add.text(cx, cy - 170, this.tab.label, overlayStyle(84, TEXT_COLORS.primary, true)).setOrigin(0.5);
+    this.add.text(cx, cy - 80, this.tab.description, wrapStyle(34, TEXT_COLORS.secondary, content.width - 160, false, 'center')).setOrigin(0.5);
 
     if (!this.tab.plannedStep) return;
-    this.add
-      .rectangle(cx, cy + 75, content.width - 160, 150, COLORS.panel)
-      .setRounded(24)
-      .setStrokeStyle(3, COLORS.panelBorder);
-    this.add
-      .text(cx, cy + 45, 'COMING IN', {
-        fontFamily: FONT_FAMILY,
-        fontSize: '24px',
-        fontStyle: 'bold',
-        color: TEXT_COLORS.accent,
-      })
-      .setOrigin(0.5);
-    this.add
-      .text(cx, cy + 95, this.tab.plannedStep, {
-        fontFamily: FONT_FAMILY,
-        fontSize: '32px',
-        color: TEXT_COLORS.primary,
-      })
-      .setOrigin(0.5);
+    addFrame(this, cx, cy + 75, content.width - 160, 150, { originX: 0.5, originY: 0.5 });
+    this.add.text(cx, cy + 45, 'COMING IN', textStyle(24, TEXT_COLORS.warm, true)).setOrigin(0.5);
+    this.add.text(cx, cy + 95, this.tab.plannedStep, textStyle(32, TEXT_COLORS.primary)).setOrigin(0.5);
   }
 }

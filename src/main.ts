@@ -1,3 +1,4 @@
+import '@fontsource/jersey-10/latin-400.css';
 import Phaser from 'phaser';
 import { GameModel } from './core/GameModel';
 import { MemoryStorage, SaveManager, type KeyValueStorage } from './core/save';
@@ -39,6 +40,16 @@ const model = new GameModel(loaded.state, saves, now, loaded.awaySeconds);
 const width = GAME_WIDTH;
 const height = computeGameHeight(window.innerWidth, window.innerHeight);
 const ctx: AppContext = { model, layout: computeLayout(width, height) };
+
+/**
+ * Phaser draws text once into a texture, so the pixel font must be ready first. Give up after a
+ * moment (e.g. offline with an empty cache) rather than never starting.
+ */
+async function loadFonts(): Promise<void> {
+  const fonts = document.fonts.load('32px "Jersey 10"');
+  await Promise.race([fonts, new Promise((resolve) => setTimeout(resolve, 2500))]).catch(() => undefined);
+}
+await loadFonts();
 
 const game = new Phaser.Game({
   type: Phaser.AUTO,

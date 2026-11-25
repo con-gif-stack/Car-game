@@ -17,6 +17,8 @@ export interface DialogOptions {
   area: Area;
   lines: DialogLine[];
   align?: 'left' | 'center';
+  /** Title plate on the panel's top edge. */
+  header?: string;
   buttonLabel: string;
   onButton: () => void;
   /** Called when the dimmed backdrop is tapped. Omit to make the backdrop do nothing. */
@@ -26,6 +28,7 @@ export interface DialogOptions {
 /** A simple panel: text lines and one button. Destroy the result to close it. */
 export function openDialog(scene: Phaser.Scene, options: DialogOptions): Phaser.GameObjects.Container {
   const panel = new Panel(scene, { area: options.area, align: options.align, onBackdrop: options.onBackdrop });
+  if (options.header) panel.header(options.header);
   for (const line of options.lines) {
     panel.text(line.text, line.size, line.color, { bold: line.bold, gapAfter: line.gapAfter });
   }

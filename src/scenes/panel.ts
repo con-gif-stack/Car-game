@@ -1,5 +1,7 @@
 import Phaser from 'phaser';
-import { COLORS, FONT_FAMILY, TEXT_COLORS } from '../ui/theme';
+import { COLORS, TEXT_COLORS, UI_PIXEL } from '../ui/theme';
+import { textStyle } from './textStyles';
+import { addButton, addFrame, addRule, type ButtonTone, type PixelButton } from './ui';
 
 export interface Area {
   x: number;
@@ -15,53 +17,72 @@ export interface PanelOptions {
   onBackdrop?: () => void;
   /** Default alignment for text lines. */
   align?: 'left' | 'center';
+  /** Pop in when opened. Turn off when rebuilding a panel that is already showing. Default true. */
+  animate?: boolean;
+  /** Edge colour of the frame. */
+  edgeColor?: number;
 }
 
-export interface ButtonOptions {
+export interface PanelButtonOptions {
   onClick: () => void;
-  /** Disabled buttons are dimmed and ignore taps. Default true. */
+  /** Disabled buttons are grey and ignore taps. Default true. */
   enabled?: boolean;
-  /** Outline colour when enabled. Default the accent colour. */
-  color?: number;
+  /** Colour scheme. Default 'primary' (warm orange). */
+  tone?: ButtonTone;
   height?: number;
+  /** Icon texture key shown before the label. */
+  icon?: string;
 }
 
 const MARGIN = 52;
 const PADDING = 48;
 const ICON_SCALE = 4;
+const HEADER_HEIGHT = 64;
+
+type Placeable = Phaser.GameObjects.Components.Transform & Phaser.GameObjects.Components.Visible & Phaser.GameObjects.GameObject;
 
 /**
- * Builds a centred panel over a dimmed backdrop, top to bottom: add lines, rows and buttons,
- * then call `finish()`. Destroy `container` to close it.
+ * Builds a centred pixel-framed panel over a dimmed backdrop, top to bottom: add lines, rows and
+ * buttons, then call `finish()`. Destroy `container` to close it.
  */
 export class Panel {
   readonly container: Phaser.GameObjects.Container;
   readonly innerWidth: number;
+  private readonly body: Phaser.GameObjects.Container;
+  private readonly backdrop: Phaser.GameObjects.Rectangle;
   private readonly left: number;
   private readonly centerX: number;
   private readonly panelX: number;
   private readonly panelWidth: number;
-  /** Objects with their y offset from the top of the content. */
-  private readonly placed: { obj: Phaser.GameObjects.Components.Transform & Phaser.GameObjects.GameObject; y: number }[] = [];
+  /** Objects with their y offset from the top of the content, and the line they belong to. */
+  private readonly placed: { obj: Placeable; y: number; group: number }[] = [];
   private cursor = 0;
+  private group = 0;
+  private headerTitle: { text: string; color: number } | null = null;
 
   constructor(
     private readonly scene: Phaser.Scene,
     private readonly options: PanelOptions,
   ) {
     const { area } = options;
-    this.panelWidth = area.width - 2 * MARGIN;
-    this.panelX = area.x + MARGIN;
+    this.panelWidth = Math.round((area.width - 2 * MARGIN) / UI_PIXEL) * UI_PIXEL;
+    this.panelX = area.x + (area.width - this.panelWidth) / 2;
     this.innerWidth = this.panelWidth - 2 * PADDING;
     this.left = this.panelX + PADDING;
     this.centerX = area.x + area.width / 2;
 
-    const backdrop = scene.add
-      .rectangle(area.x, area.y, area.width, area.height, 0x000000, 0.65)
+    this.backdrop = scene.add
+      .rectangle(area.x, area.y, area.width, area.height, 0x05030c, 0.72)
       .setOrigin(0)
       .setInteractive();
-    if (options.onBackdrop) backdrop.on('pointerup', options.onBackdrop);
-    this.container = scene.add.container(0, 0, [backdrop]).setDepth(1000);
+    if (options.onBackdrop) this.backdrop.on('pointerup', options.onBackdrop);
+    this.body = scene.add.container(0, 0);
+    this.container = scene.add.container(0, 0, [this.backdrop, this.body]).setDepth(1000);
+  }
+
+  /** A title plate sitting on the panel's top edge. */
+  header(title: string, color: number = COLORS.accent): void {
+    this.headerTitle = { text: title, color };
   }
 
   /** A line of text. */
@@ -74,21 +95,20 @@ export class Panel {
     const align = opts.align ?? this.options.align ?? 'left';
     const t = this.scene.add
       .text(align === 'center' ? this.centerX : this.left, 0, content, {
-        fontFamily: FONT_FAMILY,
-        fontSize: `${size}px`,
-        fontStyle: opts.bold ? 'bold' : 'normal',
-        color,
+        ...textStyle(size, color, opts.bold),
         align,
         wordWrap: { width: this.innerWidth },
       })
       .setOrigin(align === 'center' ? 0.5 : 0, 0);
-    this.place(t, t.height + (opts.gapAfter ?? 12));
+    this.group++;
+    this.placeAt(t, 0);
+    this.cursor += t.height + (opts.gapAfter ?? 12);
     return t;
   }
 
   /**
    * A row with an optional icon, a title (and optional line under it) on the left, and a value
-   * on the right.
+   * on the right. Returns the value text, if any.
    */
   row(opts: {
     icon?: string;
@@ -102,115 +122,146 @@ export class Panel {
     gapAfter?: number;
     /** Icon pixel scale (icons are 12 pixels square). */
     iconScale?: number;
-  }): void {
+    /** Draws the row on a card. */
+    card?: boolean;
+  }): Phaser.GameObjects.Text | null {
+    this.group++;
     const size = opts.size ?? 30;
     const iconScale = opts.iconScale ?? ICON_SCALE;
     const iconSize = opts.icon ? 12 * iconScale : 0;
-    const textX = this.left + (opts.icon ? iconSize + 18 : 0);
-    const title = this.scene.add.text(textX, 0, opts.title, {
-      fontFamily: FONT_FAMILY,
-      fontSize: `${size}px`,
-      fontStyle: 'bold',
-      color: opts.titleColor ?? TEXT_COLORS.primary,
-    });
+    const inset = opts.card ? 20 : 0;
+    const textX = this.left + inset + (opts.icon ? iconSize + 18 : 0);
+    const title = this.scene.add.text(textX, 0, opts.title, textStyle(size, opts.titleColor ?? TEXT_COLORS.primary, true));
     const sub = opts.sub
       ? this.scene.add.text(textX, 0, opts.sub, {
-          fontFamily: FONT_FAMILY,
-          fontSize: `${Math.round(size * 0.75)}px`,
-          color: opts.subColor ?? TEXT_COLORS.secondary,
-          wordWrap: { width: this.innerWidth - iconSize - 18 - 160 },
+          ...textStyle(Math.round(size * 0.75), opts.subColor ?? TEXT_COLORS.secondary),
+          wordWrap: { width: this.innerWidth - iconSize - 18 - 160 - 2 * inset },
         })
       : null;
     const textHeight = title.height + (sub ? sub.height + 2 : 0);
-    const height = Math.max(iconSize, textHeight);
+    const content = Math.max(iconSize, textHeight);
+    const height = content + 2 * (opts.card ? 14 : 0);
     const top = (height - textHeight) / 2;
 
+    if (opts.card) {
+      const card = addFrame(this.scene, this.left, 0, this.innerWidth, height, { kind: 'card', color: COLORS.panelBorder });
+      this.placeAt(card, 0);
+    }
     if (opts.icon) {
-      const icon = this.scene.add.image(this.left, 0, opts.icon).setOrigin(0).setScale(iconScale);
+      const icon = this.scene.add.image(this.left + inset, 0, opts.icon).setOrigin(0).setScale(iconScale);
       this.placeAt(icon, (height - iconSize) / 2);
     }
     this.placeAt(title, top);
     if (sub) this.placeAt(sub, top + title.height + 2);
+    let valueText: Phaser.GameObjects.Text | null = null;
     if (opts.value !== undefined) {
-      const value = this.scene.add
-        .text(this.left + this.innerWidth, 0, opts.value, {
-          fontFamily: FONT_FAMILY,
-          fontSize: `${size}px`,
-          fontStyle: 'bold',
-          color: opts.valueColor ?? TEXT_COLORS.primary,
-        })
+      valueText = this.scene.add
+        .text(this.left + this.innerWidth - inset, 0, opts.value, textStyle(size, opts.valueColor ?? TEXT_COLORS.primary, true))
         .setOrigin(1, 0);
-      this.placeAt(value, (height - value.height) / 2);
+      this.placeAt(valueText, (height - valueText.height) / 2);
     }
     this.cursor += height + (opts.gapAfter ?? 14);
+    return valueText;
   }
 
   /** A full-width button. */
-  button(label: string, opts: ButtonOptions): void {
-    const enabled = opts.enabled ?? true;
+  button(label: string, opts: PanelButtonOptions): PixelButton {
+    this.group++;
     const height = opts.height ?? 96;
-    const rect = this.scene.add
-      .rectangle(this.centerX, 0, this.innerWidth, height, enabled ? COLORS.panelRaised : COLORS.panel)
-      .setOrigin(0.5, 0)
-      .setRounded(24)
-      .setStrokeStyle(3, enabled ? (opts.color ?? COLORS.accent) : COLORS.panelBorder);
-    if (enabled) {
-      rect.setInteractive({ useHandCursor: true });
-      rect.on('pointerup', opts.onClick);
-    }
-    const text = this.scene.add
-      .text(this.centerX, 0, label, {
-        fontFamily: FONT_FAMILY,
-        fontSize: '32px',
-        fontStyle: 'bold',
-        color: enabled ? TEXT_COLORS.primary : TEXT_COLORS.muted,
-        align: 'center',
-        wordWrap: { width: this.innerWidth - 40 },
-      })
-      .setOrigin(0.5);
-    this.placeAt(rect, 0);
-    this.placeAt(text, height / 2);
+    const button = addButton(this.scene, this.centerX, 0, this.innerWidth, height, label, {
+      onClick: opts.onClick,
+      enabled: opts.enabled,
+      tone: opts.tone,
+      icon: opts.icon,
+      fontSize: height < 90 ? 30 : 34,
+    });
+    this.placeAt(button, height / 2);
     this.cursor += height + 16;
+    return button;
   }
 
-  /** A thin divider line. */
+  /** A dithered divider line. */
   divider(gapAfter = 20): void {
-    const line = this.scene.add.rectangle(this.left, 0, this.innerWidth, 2, COLORS.panelBorder).setOrigin(0);
-    this.placeAt(line, 4);
-    this.cursor += 6 + gapAfter;
+    this.group++;
+    this.placeAt(addRule(this.scene, this.left, 0, this.innerWidth), 6);
+    this.cursor += 14 + gapAfter;
   }
 
   gap(height: number): void {
     this.cursor += height;
   }
 
-  /** Draws the panel background and moves everything into place, centred in the area. */
+  /** Draws the panel frame and moves everything into place, centred in the area. */
   finish(): Phaser.GameObjects.Container {
     const { area } = this.options;
-    const panelHeight = PADDING + this.cursor + PADDING - 16;
-    const panelY = area.y + Math.max(MARGIN / 2, (area.height - panelHeight) / 2);
-    const background = this.scene.add
-      .rectangle(this.panelX, panelY, this.panelWidth, panelHeight, COLORS.panel)
-      .setOrigin(0)
-      .setRounded(28)
-      .setStrokeStyle(3, COLORS.panelBorder)
-      .setInteractive(); // Swallows taps so they don't reach the backdrop.
-    this.container.add(background);
+    const headerSpace = this.headerTitle ? HEADER_HEIGHT / 2 + 8 : 0;
+    const panelHeight = PADDING + headerSpace + this.cursor + PADDING - 16;
+    const panelY = area.y + Math.max(MARGIN / 2 + headerSpace, (area.height - panelHeight) / 2);
+    const background = addFrame(this.scene, this.panelX, panelY, this.panelWidth, panelHeight, {
+      kind: 'panel',
+      color: this.options.edgeColor ?? COLORS.panelBorder,
+    }).setInteractive(); // Swallows taps so they don't reach the backdrop.
+    this.body.add(background);
+
+    if (this.headerTitle) {
+      const title = this.scene.add.text(this.centerX, panelY, this.headerTitle.text, textStyle(30, TEXT_COLORS.primary, true)).setOrigin(0.5);
+      const plateWidth = Math.min(this.panelWidth - 80, title.width + 96);
+      const plate = addFrame(this.scene, this.centerX, panelY, plateWidth, HEADER_HEIGHT, {
+        kind: 'plate',
+        color: this.headerTitle.color,
+        originX: 0.5,
+        originY: 0.5,
+      });
+      title.setStroke('#07050f', 6);
+      title.y -= 2;
+      this.body.add([plate, title]);
+    }
+
+    const top = panelY + PADDING + headerSpace;
     for (const { obj, y } of this.placed) {
-      obj.y += panelY + PADDING + y;
-      this.container.add(obj);
+      obj.y += top + y;
+      this.body.add(obj);
+    }
+
+    if (this.options.animate ?? true) {
+      this.backdrop.setAlpha(0);
+      this.scene.tweens.add({ targets: this.backdrop, alpha: 1, duration: 160 });
+      this.body.setAlpha(0).setY(36);
+      this.scene.tweens.add({ targets: this.body, alpha: 1, y: 0, duration: 240, ease: 'Back.easeOut' });
     }
     return this.container;
   }
 
-  private place(obj: Phaser.GameObjects.Components.Transform & Phaser.GameObjects.GameObject, height: number): void {
-    this.placeAt(obj, 0);
-    this.cursor += height;
+  /**
+   * Reveals the panel's lines one after another (call after `finish`). Lines before `fromGroup`
+   * show at once. Returns the time (ms) when the last line appears.
+   */
+  reveal(staggerMs: number, fromGroup = 0, startDelayMs = 250): number {
+    let last = 0;
+    for (const { obj, group } of this.placed) {
+      if (group < fromGroup) continue;
+      const delay = startDelayMs + (group - fromGroup) * staggerMs;
+      last = Math.max(last, delay);
+      obj.setVisible(false);
+      const targetX = obj.x;
+      this.scene.time.delayedCall(delay, () => {
+        if (!obj.active) return;
+        obj.setVisible(true);
+        obj.x = targetX - 40;
+        this.scene.tweens.add({ targets: obj, x: targetX, duration: 220, ease: 'Cubic.easeOut' });
+      });
+    }
+    return last;
   }
 
-  private placeAt(obj: Phaser.GameObjects.Components.Transform & Phaser.GameObjects.GameObject, offset: number): void {
+  /** Number of the most recently added line (for `reveal`). */
+  get lineCount(): number {
+    return this.group;
+  }
+
+  private placeAt(obj: Placeable, offset: number): void {
     obj.y = 0;
-    this.placed.push({ obj, y: this.cursor + offset });
+    this.placed.push({ obj, y: this.cursor + offset, group: this.group });
   }
 }
 

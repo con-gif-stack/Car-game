@@ -10,7 +10,8 @@ import type { AppContext } from './context';
 import { DriveView } from './DriveView';
 import { cssColor } from './panel';
 import { openPartPanel, openWorkshopPanel, panelSignature } from './panels';
-import { overlayStyle, textStyle } from './textStyles';
+import { fontPx, overlayStyle, textStyle, wrapStyle } from './textStyles';
+import { addButton, addDot, addFrame, PixelBar, restyleFrame } from './ui';
 
 const PAD = 32;
 const SECTION_GAP = 24;
@@ -27,18 +28,17 @@ const PARTS_SECTION_HEIGHT = PARTS_HEADER + 2 * CARD_HEIGHT + CARD_GAP;
 const PANEL_REFRESH_INTERVAL = 0.25;
 
 interface StatRow {
-  fill: Phaser.GameObjects.Rectangle;
+  bar: PixelBar;
   value: Phaser.GameObjects.Text;
-  barWidth: number;
 }
 
 interface PartCard {
   slot: SlotDef;
-  background: Phaser.GameObjects.Rectangle;
+  background: Phaser.GameObjects.Image;
   qualityStrip: Phaser.GameObjects.Rectangle;
   name: Phaser.GameObjects.Text;
   level: Phaser.GameObjects.Text;
-  badge: Phaser.GameObjects.Arc;
+  badge: Phaser.GameObjects.Image;
 }
 
 type OpenPanel = { kind: 'part'; slot: SlotDef } | { kind: 'workshop' };
@@ -126,8 +126,7 @@ export class GarageScene extends Phaser.Scene {
       const row = this.statRows.get(stat.id);
       if (!row) continue;
       const value = stats[stat.id];
-      const ratio = Phaser.Math.Clamp(value / stat.displayMax, 0, 1);
-      row.fill.setSize(Math.max(row.fill.height, row.barWidth * ratio), row.fill.height);
+      row.bar.set(value / stat.displayMax);
       row.value.setText(stat.unit ? `${Math.round(value)} ${stat.unit}` : `${Math.round(value)}`);
     }
     this.refreshCards();
@@ -141,10 +140,11 @@ export class GarageScene extends Phaser.Scene {
       const level = car.parts[card.slot.id]?.level ?? 1;
       card.name.setText(part ? part.name : 'Empty');
       // Long names (e.g. "Race Adjustable Coilovers") shrink to stay within two lines.
-      card.name.setFontSize(25);
-      if (card.name.height > 70) card.name.setFontSize(20);
+      card.name.setFontSize(fontPx(24));
+      if (card.name.height > 70) card.name.setFontSize(fontPx(19));
       card.name.setColor(part ? TEXT_COLORS.primary : TEXT_COLORS.muted);
-      card.background.setFillStyle(part ? COLORS.panelRaised : COLORS.panel);
+      restyleFrame(card.background, 'card', part ? QUALITIES[part.quality].color : COLORS.panelBorder);
+      card.background.setAlpha(part ? 1 : 0.6);
       card.qualityStrip.setVisible(part !== null);
       if (part) {
         const color = QUALITIES[part.quality].color;
@@ -188,7 +188,7 @@ export class GarageScene extends Phaser.Scene {
 
     this.carName = this.add.text(PAD, 24, '', overlayText(52, TEXT_COLORS.primary, true));
     this.carDescription = this.add.text(PAD, 88, '', {
-      ...overlayText(26, TEXT_COLORS.primary),
+      ...overlayText(24, TEXT_COLORS.primary),
       wordWrap: { width: width * 0.64 },
     });
     this.bestRunText = this.add
@@ -217,80 +217,66 @@ export class GarageScene extends Phaser.Scene {
   }
 
   private createStatsPanel(width: number, y: number): void {
-    this.add
-      .rectangle(PAD, y, width - 2 * PAD, STATS_PANEL_HEIGHT, COLORS.panel)
-      .setOrigin(0)
-      .setRounded(24)
-      .setStrokeStyle(3, COLORS.panelBorder);
+    addFrame(this, PAD, y, width - 2 * PAD, STATS_PANEL_HEIGHT);
 
     const labelX = PAD + 32;
     const barX = PAD + 320;
     const barWidth = width - PAD - 170 - barX;
-    const barHeight = 18;
+    const barHeight = 24;
 
     STATS.forEach((stat, i) => {
       const rowY = y + 24 + i * STAT_ROW_HEIGHT + STAT_ROW_HEIGHT / 2;
-      this.add.text(labelX, rowY, stat.label, text(30, TEXT_COLORS.secondary)).setOrigin(0, 0.5);
-      this.add
-        .rectangle(barX, rowY, barWidth, barHeight, COLORS.panelRaised)
-        .setOrigin(0, 0.5)
-        .setRounded(barHeight / 2);
-      const fill = this.add
-        .rectangle(barX, rowY, barHeight, barHeight, COLORS.accentAlt)
-        .setOrigin(0, 0.5)
-        .setRounded(barHeight / 2);
+      this.add.text(labelX, rowY, stat.label, text(28, TEXT_COLORS.secondary)).setOrigin(0, 0.5);
+      const bar = new PixelBar(this, barX, rowY, barWidth, barHeight, COLORS.accentAlt, { segment: 6 });
       const value = this.add
-        .text(width - PAD - 32, rowY, '', text(30, TEXT_COLORS.primary, true))
+        .text(width - PAD - 32, rowY, '', text(28, TEXT_COLORS.primary, true))
         .setOrigin(1, 0.5);
-      this.statRows.set(stat.id, { fill, value, barWidth });
+      this.statRows.set(stat.id, { bar, value });
     });
   }
 
   private createPartsGrid(width: number, y: number): void {
-    this.add.text(PAD, y + 8, 'PARTS', text(26, TEXT_COLORS.accent, true)).setOrigin(0, 0);
+    this.add.text(PAD, y + 4, 'PARTS', overlayText(28, TEXT_COLORS.warm, true)).setOrigin(0, 0);
 
     // Workshop button: garage-wide upgrades.
     const buttonWidth = 220;
-    const workshop = this.add
-      .rectangle(width - PAD - buttonWidth, y, buttonWidth, 44, COLORS.panelRaised)
-      .setOrigin(0)
-      .setRounded(14)
-      .setStrokeStyle(2, COLORS.accentAlt)
-      .setInteractive({ useHandCursor: true });
-    workshop.on('pointerup', () => this.showPanel({ kind: 'workshop' }));
-    this.add
-      .text(width - PAD - buttonWidth / 2, y + 22, 'Workshop', text(24, TEXT_COLORS.primary, true))
-      .setOrigin(0.5);
+    addButton(this, width - PAD - buttonWidth / 2, y + 22, buttonWidth, 48, 'Workshop', {
+      onClick: () => this.showPanel({ kind: 'workshop' }),
+      tone: 'secondary',
+      fontSize: 24,
+    });
 
     const cardWidth = (width - 2 * PAD - (CARD_COLUMNS - 1) * CARD_GAP) / CARD_COLUMNS;
     SLOTS.forEach((slot, i) => {
       const x = PAD + (i % CARD_COLUMNS) * (cardWidth + CARD_GAP);
       const cardY = y + PARTS_HEADER + Math.floor(i / CARD_COLUMNS) * (CARD_HEIGHT + CARD_GAP);
 
-      const background = this.add
-        .rectangle(x, cardY, cardWidth, CARD_HEIGHT, COLORS.panelRaised)
-        .setOrigin(0)
-        .setRounded(18)
-        .setStrokeStyle(3, COLORS.panelBorder)
-        .setInteractive({ useHandCursor: true });
-      background.on('pointerup', () => this.showPanel({ kind: 'part', slot }));
+      const background = addFrame(this, x, cardY, cardWidth, CARD_HEIGHT, { kind: 'card' }).setInteractive({
+        useHandCursor: true,
+      });
+      background.on('pointerdown', () => background.setY(cardY + 4));
+      background.on('pointerout', () => background.setY(cardY));
+      background.on('pointerup', () => {
+        background.setY(cardY);
+        this.showPanel({ kind: 'part', slot });
+      });
 
       const qualityStrip = this.add
         .rectangle(x + 14, cardY + 20, 6, CARD_HEIGHT - 40, COLORS.panelBorder)
         .setOrigin(0);
-      this.add.text(x + 32, cardY + 16, slot.label, text(22, TEXT_COLORS.secondary));
-      const name = this.add.text(x + 32, cardY + 46, '', {
-        ...text(25, TEXT_COLORS.primary, true),
-        wordWrap: { width: cardWidth - 48 },
-      });
+      this.add.text(x + 32, cardY + 16, slot.label, text(21, TEXT_COLORS.secondary));
+      const name = this.add.text(x + 32, cardY + 44, '', wrapStyle(24, TEXT_COLORS.primary, cardWidth - 48, true));
       const level = this.add.text(x + 32, cardY + CARD_HEIGHT - 16, '', text(20, TEXT_COLORS.secondary, true)).setOrigin(0, 1);
-      const badge = this.add.circle(x + cardWidth - 18, cardY + 18, 9, COLORS.accent).setVisible(false);
+      const badge = addDot(this, x + cardWidth - 20, cardY + 20).setVisible(false);
       this.partCards.push({ slot, background, qualityStrip, name, level, badge });
     });
   }
 
   /** Opens (or redraws) a panel over the tab. */
   private showPanel(which: OpenPanel): void {
+    // Only pop in when newly opened, not when redrawing the panel already on screen.
+    const key = (p: OpenPanel | null) => (p ? (p.kind === 'part' ? p.slot.id : p.kind) : '');
+    const animate = key(this.openPanel) !== key(which);
     this.panel?.destroy();
     this.openPanel = which;
     this.panelSignature = panelSignature(this.ctx.model);
@@ -299,8 +285,8 @@ export class GarageScene extends Phaser.Scene {
     const close = () => this.closePanel();
     this.panel =
       which.kind === 'part'
-        ? openPartPanel(this, this.ctx.model, which.slot, area, close)
-        : openWorkshopPanel(this, this.ctx.model, area, close);
+        ? openPartPanel(this, this.ctx.model, which.slot, area, close, animate)
+        : openWorkshopPanel(this, this.ctx.model, area, close, animate);
   }
 
   private closePanel(): void {

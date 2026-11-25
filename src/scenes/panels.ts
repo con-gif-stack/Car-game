@@ -29,8 +29,8 @@ import { materialIconKey, moneyIconKey } from './textures';
  * underlying numbers change (see panelSignature).
  */
 
-const RED = '#ff5d6c';
-const GREEN = '#6fe08a';
+const RED = TEXT_COLORS.bad;
+const GREEN = TEXT_COLORS.good;
 
 const fmtStat = (value: number) => `${Math.round(value * 10) / 10}`;
 
@@ -83,15 +83,16 @@ export function openPartPanel(
   slot: SlotDef,
   area: Area,
   onClose: () => void,
+  animate = true,
 ): Phaser.GameObjects.Container {
   const car = model.activeCar;
   const resources = model.state.resources;
   const part = getInstalledPart(car, slot.id);
   const level = car.parts[slot.id]?.level ?? 1;
   const current = part ? partStatsAtLevel(part, level) : {};
-  const panel = new Panel(scene, { area, onBackdrop: onClose });
+  const panel = new Panel(scene, { area, onBackdrop: onClose, animate });
 
-  panel.text(slot.label.toUpperCase(), 26, TEXT_COLORS.accent, { bold: true, gapAfter: 8 });
+  panel.header(slot.label.toUpperCase());
   panel.text(part?.name ?? 'Empty slot', 48, TEXT_COLORS.primary, { bold: true, gapAfter: 6 });
   if (part) {
     const quality = QUALITIES[part.quality];
@@ -107,14 +108,14 @@ export function openPartPanel(
     panel.divider();
     const cost = levelUpCost(part, level);
     if (cost) {
-      panel.text(`LEVEL UP → ${level + 1}`, 24, TEXT_COLORS.muted, { bold: true, gapAfter: 6 });
+      panel.text(`LEVEL UP > ${level + 1}`, 24, TEXT_COLORS.muted, { bold: true, gapAfter: 6 });
       panel.text(statChanges(current, partStatsAtLevel(part, level + 1)), 28, GREEN, { gapAfter: 12 });
       costRows(panel, scene, resources, cost);
       panel.gap(6);
       panel.button(`Level up · ${formatNumber(cost.money ?? 0)}`, {
         enabled: canAfford(resources, cost),
         onClick: () => model.buyLevelUp(slot.id),
-        color: COLORS.accentAlt,
+        tone: 'secondary',
       });
     } else {
       panel.text('Max level. Install the next tier for more.', 28, TEXT_COLORS.muted, { gapAfter: 16 });
@@ -126,7 +127,7 @@ export function openPartPanel(
   const next = nextTierPart(car, slot.id);
   if (next) {
     const quality = QUALITIES[next.quality];
-    panel.text(`UPGRADE → ${quality.label.toUpperCase()}`, 24, TEXT_COLORS.muted, { bold: true, gapAfter: 6 });
+    panel.text(`UPGRADE > ${quality.label.toUpperCase()}`, 24, TEXT_COLORS.muted, { bold: true, gapAfter: 6 });
     panel.text(next.name, 34, cssColor(quality.color), { bold: true, gapAfter: 4 });
     panel.text(statChanges(current, partStatsAtLevel(next, 1)), 28, GREEN, { gapAfter: 12 });
     const cost = tierCost(next);
@@ -141,7 +142,7 @@ export function openPartPanel(
   }
 
   panel.gap(4);
-  panel.button('Close', { onClick: onClose, color: COLORS.panelBorder, height: 80 });
+  panel.button('Close', { onClick: onClose, tone: 'neutral', height: 80 });
   return panel.finish();
 }
 
@@ -151,13 +152,14 @@ export function openWorkshopPanel(
   model: GameModel,
   area: Area,
   onClose: () => void,
+  animate = true,
 ): Phaser.GameObjects.Container {
   const resources = model.state.resources;
   const level = model.state.workshop.salvageMagnetLevel;
   const { maxLevel } = ECONOMY.salvageMagnet;
-  const panel = new Panel(scene, { area, onBackdrop: onClose });
+  const panel = new Panel(scene, { area, onBackdrop: onClose, animate });
 
-  panel.text('WORKSHOP', 26, TEXT_COLORS.accent, { bold: true, gapAfter: 8 });
+  panel.header('WORKSHOP');
   panel.text('Salvage Magnet', 48, TEXT_COLORS.primary, { bold: true, gapAfter: 6 });
   panel.text(`Level ${level}/${maxLevel}`, 28, cssColor(COLORS.accentAlt), { bold: true, gapAfter: 10 });
   panel.text(
@@ -171,8 +173,8 @@ export function openWorkshopPanel(
   const cost = salvageMagnetCost(level);
   const now = salvageMagnetMultiplier(level);
   if (cost) {
-    panel.text(`LEVEL UP → ${level + 1}`, 24, TEXT_COLORS.muted, { bold: true, gapAfter: 6 });
-    panel.text(`Rare finds ×${fmtStat(now)} → ×${fmtStat(salvageMagnetMultiplier(level + 1))}`, 30, GREEN, {
+    panel.text(`LEVEL UP > ${level + 1}`, 24, TEXT_COLORS.muted, { bold: true, gapAfter: 6 });
+    panel.text(`Rare finds ×${fmtStat(now)} > ×${fmtStat(salvageMagnetMultiplier(level + 1))}`, 30, GREEN, {
       gapAfter: 12,
     });
     costRows(panel, scene, resources, cost);
@@ -180,13 +182,13 @@ export function openWorkshopPanel(
     panel.button('Upgrade magnet', {
       enabled: canAfford(resources, cost),
       onClick: () => model.buySalvageMagnet(),
-      color: COLORS.accentAlt,
+      tone: 'secondary',
     });
   } else {
     panel.text(`Fully upgraded: rare finds ×${fmtStat(now)}.`, 30, GREEN, { gapAfter: 16 });
   }
   panel.gap(4);
-  panel.button('Close', { onClick: onClose, color: COLORS.panelBorder, height: 80 });
+  panel.button('Close', { onClick: onClose, tone: 'neutral', height: 80 });
   return panel.finish();
 }
 
@@ -196,13 +198,14 @@ export function openInventoryPanel(
   model: GameModel,
   area: Area,
   onClose: () => void,
+  animate = true,
 ): Phaser.GameObjects.Container {
   const { materials } = model.state.resources;
   const rates = model.incomeRates().materialsPerSecond;
   const farmed = new Set(DEPOSITS.map((d) => d.material));
-  const panel = new Panel(scene, { area, onBackdrop: onClose });
+  const panel = new Panel(scene, { area, onBackdrop: onClose, animate });
 
-  panel.text('MATERIALS', 26, TEXT_COLORS.accent, { bold: true, gapAfter: 8 });
+  panel.header('MATERIALS');
   panel.text('Everything your drones, runs and scavenging have brought in.', 28, TEXT_COLORS.secondary, { gapAfter: 20 });
   for (const material of MATERIALS) {
     const rarity = RARITIES[material.rarity];
@@ -224,7 +227,7 @@ export function openInventoryPanel(
     });
   }
   panel.gap(4);
-  panel.button('Close', { onClick: onClose, color: COLORS.panelBorder, height: 80 });
+  panel.button('Close', { onClick: onClose, tone: 'neutral', height: 80 });
   return panel.finish();
 }
 
@@ -234,15 +237,16 @@ export function openDroneBayPanel(
   model: GameModel,
   area: Area,
   onClose: () => void,
+  animate = true,
 ): Phaser.GameObjects.Container {
   const resources = model.state.resources;
   const farm = model.state.farm;
   const current = DRONE_MODELS[farm.droneModel] ?? DRONE_MODELS[0];
   const rates = farmRates(farm);
   const perHour = MATERIAL_IDS.reduce((sum, id) => sum + rates.materials[id], 0) * 3600;
-  const panel = new Panel(scene, { area, onBackdrop: onClose });
+  const panel = new Panel(scene, { area, onBackdrop: onClose, animate });
 
-  panel.text('DRONE BAY', 26, TEXT_COLORS.accent, { bold: true, gapAfter: 8 });
+  panel.header('DRONE BAY');
   panel.text(`${farm.droneCount} × ${current?.name ?? ''}`, 48, TEXT_COLORS.primary, { bold: true, gapAfter: 6 });
   panel.text(current?.description ?? '', 28, TEXT_COLORS.secondary, { gapAfter: 8 });
   panel.text(
@@ -261,7 +265,7 @@ export function openDroneBayPanel(
     panel.button('Build drone', {
       enabled: canAfford(resources, buildCost),
       onClick: () => model.buyDrone(),
-      color: COLORS.accentAlt,
+      tone: 'secondary',
     });
   } else {
     panel.text(`The garage can run ${DRONES.maxCount} drones. Garage upgrades will add room.`, 28, TEXT_COLORS.muted, { gapAfter: 16 });
@@ -271,7 +275,7 @@ export function openDroneBayPanel(
   const next = DRONE_MODELS[farm.droneModel + 1];
   const modelCost = droneModelCost(farm.droneModel);
   if (next && modelCost) {
-    panel.text(`UPGRADE → ${next.name.toUpperCase()}`, 24, TEXT_COLORS.muted, { bold: true, gapAfter: 6 });
+    panel.text(`UPGRADE > ${next.name.toUpperCase()}`, 24, TEXT_COLORS.muted, { bold: true, gapAfter: 6 });
     panel.text(next.description, 28, TEXT_COLORS.secondary, { gapAfter: 6 });
     panel.text(
       `Speed ×${fmtStat(next.speed / (current?.speed ?? 1))} · carries ${next.capacity} · digs ×${fmtStat(next.heapYield)}`,
@@ -287,6 +291,6 @@ export function openDroneBayPanel(
   }
 
   panel.gap(4);
-  panel.button('Close', { onClick: onClose, color: COLORS.panelBorder, height: 80 });
+  panel.button('Close', { onClick: onClose, tone: 'neutral', height: 80 });
   return panel.finish();
 }

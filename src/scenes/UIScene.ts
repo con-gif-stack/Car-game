@@ -6,13 +6,14 @@ import { ECONOMY, FUEL_TANKS } from '../data/economy';
 import { MATERIALS_BY_ID } from '../data/materials';
 import type { MilestoneDef } from '../data/milestones';
 import { MATERIALS, RARITIES } from '../data/materials';
-import { drawTabIcon } from '../ui/icons';
 import { TABS, type TabDef } from '../ui/tabs';
-import { COLORS, FONT_FAMILY, TEXT_COLORS } from '../ui/theme';
+import { COLORS, TEXT_COLORS, UI_PIXEL } from '../ui/theme';
 import type { AppContext } from './context';
 import { cssColor, Panel } from './panel';
 import { openInventoryPanel } from './panels';
+import { overlayStyle, textStyle, wrapStyle } from './textStyles';
 import { materialIconKey, moneyIconKey } from './textures';
+import { addDot, addFrame, glowKey, restyleFrame, uiIconKey } from './ui';
 
 /** Most material icons shown in the top bar's Materials button. */
 const HUD_MATERIAL_ICONS = 5;
@@ -22,15 +23,17 @@ const BANNER_HOLD_MS = 3500;
 
 interface TabButton {
   tab: TabDef;
-  background: Phaser.GameObjects.Rectangle;
-  indicator: Phaser.GameObjects.Rectangle;
-  icon: Phaser.GameObjects.Graphics;
+  plate: Phaser.GameObjects.Image;
+  glow: Phaser.GameObjects.Image;
+  icon: Phaser.GameObjects.Image;
   label: Phaser.GameObjects.Text;
   /** Dot shown when the tab needs attention (e.g. Drive with full fuel tanks). */
-  dot: Phaser.GameObjects.Arc;
-  centerX: number;
-  iconY: number;
+  dot: Phaser.GameObjects.Image;
 }
+
+/** Tab icon colours. */
+const TAB_ICON_IDLE = 0x8a84b4;
+const TAB_ICON_ACTIVE = COLORS.accentWarm;
 
 /**
  * Always-on screen layer: the currency bar at the top and the tab bar at the bottom.
@@ -98,9 +101,9 @@ export class UIScene extends Phaser.Scene {
     const capHours = ECONOMY.offline.capHours;
     const away = pending.capped ? `over ${capHours}h` : formatDuration(pending.seconds);
 
-    const panel = new Panel(this, { area: { x: 0, y: 0, width, height }, align: 'center' });
-    panel.text('WELCOME BACK', 28, TEXT_COLORS.accent, { bold: true, gapAfter: 16 });
-    panel.text(`You were away for ${away}`, 44, TEXT_COLORS.primary, { bold: true, gapAfter: 24 });
+    const panel = new Panel(this, { area: { x: 0, y: 0, width, height }, align: 'center', edgeColor: COLORS.accentAlt });
+    panel.header('WELCOME BACK', COLORS.accentAlt);
+    panel.text(`You were away for ${away}`, 42, TEXT_COLORS.primary, { bold: true, gapAfter: 24 });
     panel.text(`${who} brought in`, 30, TEXT_COLORS.secondary, {
       gapAfter: 8,
     });
@@ -122,7 +125,7 @@ export class UIScene extends Phaser.Scene {
     // Highlighted when the cap was reached, so the player knows they missed some.
     panel.text(`Earnings build up for up to ${capHours} hours while you're away.`, 26,
       pending.capped ? TEXT_COLORS.accent : TEXT_COLORS.muted, { gapAfter: 20 });
-    panel.button('Collect', { onClick: () => this.collectOffline() });
+    panel.button('Collect', { onClick: () => this.collectOffline(), icon: moneyIconKey(this) });
     this.welcomeDialog = panel.finish();
   }
 
@@ -188,24 +191,30 @@ export class UIScene extends Phaser.Scene {
     const height = 190;
     const targetY = hud.height + 16;
 
-    const background = this.add
-      .rectangle(24, 0, bannerWidth, height, COLORS.panelRaised)
-      .setOrigin(0)
-      .setRounded(24)
-      .setStrokeStyle(4, COLORS.accent)
-      .setInteractive({ useHandCursor: true });
-    const style = (size: number, color: string, bold = false) => ({
-      fontFamily: FONT_FAMILY,
-      fontSize: `${size}px`,
-      fontStyle: bold ? 'bold' : 'normal',
-      color,
-      wordWrap: { width: bannerWidth - 64 },
+    const glow = this.add
+      .image(24 + bannerWidth / 2, height / 2, glowKey(this, 48, COLORS.money))
+      .setScale((bannerWidth / 96) * 1.1, (height / 96) * 1.6)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setAlpha(0);
+    const background = addFrame(this, 24, 0, bannerWidth, height, { kind: 'panel', color: COLORS.money }).setInteractive({
+      useHandCursor: true,
     });
-    const kicker = this.add.text(56, 22, '★ MILESTONE', style(24, TEXT_COLORS.accent, true));
-    const title = this.add.text(56, 56, milestone.title, style(44, TEXT_COLORS.primary, true));
-    const reward = this.add.text(56, 116, this.rewardLine(milestone) || milestone.description, style(26, cssColor(COLORS.money), true));
-    const banner = this.add.container(0, -height - 20, [background, kicker, title, reward]).setDepth(900);
+    const textX = 168;
+    const star = this.add.image(96, height / 2, uiIconKey(this, 'star')).setScale(UI_PIXEL * 1.5);
+    const kicker = this.add.text(textX, 24, 'MILESTONE', textStyle(24, TEXT_COLORS.warm, true));
+    const title = this.add.text(textX, 54, milestone.title, wrapStyle(42, TEXT_COLORS.primary, bannerWidth - textX, true));
+    const reward = this.add.text(
+      textX,
+      118,
+      this.rewardLine(milestone) || milestone.description,
+      wrapStyle(25, cssColor(COLORS.money), bannerWidth - textX - 16, true),
+    );
+    const banner = this.add.container(0, -height - 20, [glow, background, star, kicker, title, reward]).setDepth(900);
     this.banner = banner;
+    // The star pops in and the frame glows once as the banner lands.
+    star.setScale(0);
+    this.tweens.add({ targets: star, scale: UI_PIXEL * 1.5, angle: { from: -90, to: 0 }, delay: 260, duration: 420, ease: 'Back.easeOut' });
+    this.tweens.add({ targets: glow, alpha: { from: 0.9, to: 0 }, delay: 300, duration: 900, ease: 'Quad.easeOut' });
 
     const leave = () => {
       if (this.banner !== banner) return;
@@ -245,13 +254,13 @@ export class UIScene extends Phaser.Scene {
 
   private createHud(): void {
     const { hud } = this.ctx.layout;
-    this.add.rectangle(hud.x, hud.y, hud.width, hud.height, COLORS.panel).setOrigin(0);
-    this.add.rectangle(hud.x, hud.y + hud.height - 3, hud.width, 3, COLORS.panelBorder).setOrigin(0);
+    // A full-width strip; only its bottom edge shows.
+    addFrame(this, hud.x - 12, hud.y - 12, hud.width + 24, hud.height + 12, { kind: 'panel', color: COLORS.panelBorder });
 
     const margin = 24;
     const gap = 16;
     const chipHeight = 104;
-    const chipY = hud.y + (hud.height - chipHeight) / 2;
+    const chipY = hud.y + (hud.height - chipHeight) / 2 - 2;
     const midY = chipY + chipHeight / 2;
     const moneyWidth = Math.round((hud.width - 2 * margin - gap) * 0.5);
     const materialsX = hud.x + margin + moneyWidth + gap;
@@ -259,32 +268,24 @@ export class UIScene extends Phaser.Scene {
 
     // Money.
     const moneyX = hud.x + margin;
-    this.add.rectangle(moneyX, chipY, moneyWidth, chipHeight, COLORS.panelRaised).setOrigin(0).setRounded(20);
+    addFrame(this, moneyX, chipY, moneyWidth, chipHeight, { kind: 'inset', color: COLORS.money });
     this.add.image(moneyX + 22, midY, moneyIconKey(this)).setOrigin(0, 0.5).setScale(5);
-    this.moneyText = this.add
-      .text(moneyX + 100, midY + 6, '0', { fontFamily: FONT_FAMILY, fontSize: '46px', fontStyle: 'bold', color: TEXT_COLORS.primary })
-      .setOrigin(0, 1);
-    this.add
-      .text(moneyX + 100, midY + 8, 'Money', { fontFamily: FONT_FAMILY, fontSize: '24px', color: TEXT_COLORS.secondary })
-      .setOrigin(0, 0);
+    this.moneyText = this.add.text(moneyX + 100, midY + 8, '0', overlayStyle(46, TEXT_COLORS.primary, true)).setOrigin(0, 1);
+    this.add.text(moneyX + 100, midY + 8, 'Money', textStyle(22, TEXT_COLORS.secondary)).setOrigin(0, 0);
 
     // Materials button: icons of what's held; tap for the full inventory.
-    const button = this.add
-      .rectangle(materialsX, chipY, materialsWidth, chipHeight, COLORS.panelRaised)
-      .setOrigin(0)
-      .setRounded(20)
-      .setStrokeStyle(2, COLORS.panelBorder)
-      .setInteractive({ useHandCursor: true });
-    button.on('pointerup', () => this.openInventory());
+    const button = addFrame(this, materialsX, chipY, materialsWidth, chipHeight, { kind: 'card', color: COLORS.panelBorder });
+    button.setInteractive({ useHandCursor: true });
+    button.on('pointerdown', () => restyleFrame(button, 'card', COLORS.accentAlt));
+    button.on('pointerout', () => restyleFrame(button, 'card', COLORS.panelBorder));
+    button.on('pointerup', () => {
+      restyleFrame(button, 'card', COLORS.panelBorder);
+      this.openInventory();
+    });
     this.materialIconsX = materialsX + 22;
-    this.materialIconsY = chipY + 30;
+    this.materialIconsY = chipY + 34;
     this.add
-      .text(materialsX + 22, chipY + chipHeight - 14, 'Materials  ›', {
-        fontFamily: FONT_FAMILY,
-        fontSize: '24px',
-        fontStyle: 'bold',
-        color: TEXT_COLORS.secondary,
-      })
+      .text(materialsX + 22, chipY + chipHeight - 12, 'Materials  >', textStyle(22, TEXT_COLORS.secondary, true))
       .setOrigin(0, 1);
   }
 
@@ -305,52 +306,46 @@ export class UIScene extends Phaser.Scene {
 
   private createTabBar(): void {
     const { tabBar } = this.ctx.layout;
-    this.add.rectangle(tabBar.x, tabBar.y, tabBar.width, tabBar.height, COLORS.panel).setOrigin(0);
-    this.add.rectangle(tabBar.x, tabBar.y, tabBar.width, 3, COLORS.panelBorder).setOrigin(0);
+    // A full-width strip; only its top edge shows.
+    addFrame(this, tabBar.x - 12, tabBar.y, tabBar.width + 24, tabBar.height + 12, { kind: 'panel', color: COLORS.panelBorder });
 
-    const buttonWidth = tabBar.width / TABS.length;
+    const inset = 10;
+    const buttonWidth = (tabBar.width - 2 * inset) / TABS.length;
     TABS.forEach((tab, i) => {
-      const x = tabBar.x + i * buttonWidth;
+      const x = tabBar.x + inset + i * buttonWidth;
       const centerX = x + buttonWidth / 2;
-      const background = this.add
-        .rectangle(x, tabBar.y + 3, buttonWidth, tabBar.height - 3, COLORS.panel)
-        .setOrigin(0)
-        .setInteractive({ useHandCursor: true });
-      background.on('pointerup', () => this.showTab(tab));
+      const plate = addFrame(this, x + 4, tabBar.y + 14, buttonWidth - 8, tabBar.height - 30, {
+        kind: 'card',
+        color: COLORS.panelBorder,
+      }).setInteractive({ useHandCursor: true });
+      plate.on('pointerup', () => this.showTab(tab));
 
-      const indicator = this.add
-        .rectangle(centerX, tabBar.y + 3, buttonWidth * 0.5, 6, COLORS.accent)
-        .setOrigin(0.5, 0);
-      const icon = this.add.graphics();
-      const label = this.add
-        .text(centerX, tabBar.y + 140, tab.label, {
-          fontFamily: FONT_FAMILY,
-          fontSize: '28px',
-          fontStyle: 'bold',
-          color: TEXT_COLORS.secondary,
-        })
-        .setOrigin(0.5);
-
-      const dot = this.add.circle(centerX + 46, tabBar.y + 44, 10, COLORS.accent).setVisible(false);
-      this.tabButtons.push({ tab, background, indicator, icon, label, dot, centerX, iconY: tabBar.y + 78 });
+      const glow = this.add
+        .image(centerX, tabBar.y + 76, glowKey(this, 24, COLORS.accentWarm))
+        .setScale(4.5, 3)
+        .setBlendMode(Phaser.BlendModes.ADD)
+        .setAlpha(0.35);
+      const icon = this.add.image(centerX, tabBar.y + 74, uiIconKey(this, tab.id, TAB_ICON_IDLE)).setScale(UI_PIXEL);
+      const label = this.add.text(centerX, tabBar.y + 138, tab.label, textStyle(26, TEXT_COLORS.secondary, true)).setOrigin(0.5);
+      const dot = addDot(this, x + buttonWidth - 30, tabBar.y + 38).setVisible(false);
+      this.tweens.add({ targets: dot, scale: UI_PIXEL * 1.25, duration: 500, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+      this.tabButtons.push({ tab, plate, glow, icon, label, dot });
     });
   }
 
   private refreshTabButtons(): void {
     for (const button of this.tabButtons) {
       const active = button.tab.id === this.activeTab?.id;
-      button.background.setFillStyle(active ? COLORS.panelRaised : COLORS.panel);
-      button.indicator.setVisible(active);
+      restyleFrame(button.plate, 'card', active ? COLORS.accentWarm : COLORS.panelBorder);
+      button.plate.setAlpha(active ? 1 : 0.55);
+      button.glow.setVisible(active);
       button.label.setColor(active ? TEXT_COLORS.primary : TEXT_COLORS.secondary);
-      button.icon.clear();
-      drawTabIcon(
-        button.icon,
-        button.tab.id,
-        button.centerX,
-        button.iconY,
-        64,
-        active ? COLORS.accent : COLORS.textSecondary,
-      );
+      button.icon.setTexture(uiIconKey(this, button.tab.id, active ? TAB_ICON_ACTIVE : TAB_ICON_IDLE));
+      if (active) {
+        this.tweens.killTweensOf(button.icon);
+        button.icon.setScale(UI_PIXEL * 0.8);
+        this.tweens.add({ targets: button.icon, scale: UI_PIXEL, duration: 220, ease: 'Back.easeOut' });
+      }
     }
   }
 
@@ -358,11 +353,7 @@ export class UIScene extends Phaser.Scene {
   private createDebugOverlay(): void {
     const { tabBar } = this.ctx.layout;
     this.debugText = this.add
-      .text(24, tabBar.y - 16, '', {
-        fontFamily: 'ui-monospace, Menlo, Consolas, monospace',
-        fontSize: '22px',
-        color: TEXT_COLORS.muted,
-      })
+      .text(24, tabBar.y - 12, '', textStyle(20, TEXT_COLORS.muted))
       .setOrigin(0, 1);
   }
 
