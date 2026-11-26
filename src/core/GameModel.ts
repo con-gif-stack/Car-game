@@ -3,17 +3,30 @@ import { GAME_CONFIG } from '../data/gameConfig';
 import { MATERIAL_IDS } from '../data/materials';
 import { FixedStepClock } from './clock';
 import { Emitter } from './events';
-import { FarmSim, farmRates, regrowDeposits, scavenge as scavengeDeposit, type Haul } from './farm';
+import type { DroneBranchId } from '../data/farm';
+import type { GarageUpgradeId } from '../data/garage';
+import type { MaterialId } from '../data/materials';
+import { depositDef, FarmSim, farmRates, haulValue, regrowDeposits, scavenge as scavengeDeposit, type FullCheck, type Haul } from './farm';
+import { fitToStorage, fuelLimits, isFull, maxDrones, refineryRecipe, stepRefinery, storeMaterials } from './garage';
 import { combineRates, computeOfflineEarnings, trickleRates, type IncomeRates } from './idle';
 import type { SaveManager } from './save';
 import { emptyPendingOffline, type Earnings, type GameState, type PendingOffline } from './state';
 import type { MilestoneDef } from '../data/milestones';
 import { checkMilestones } from './milestones';
 import { createRun, msUntilNextTank, refillFuel, runRewards, useTank, type RunRewards, type RunState } from './run';
-import { buyDrone, buyDroneModel, buyLevelUp, buyNextTier, salvageMagnetCost, spend } from './upgrades';
+import {
+  buyDrone,
+  buyDroneBranch,
+  buyDroneModel,
+  buyGarageUpgrade,
+  buyLevelUp,
+  buyNextTier,
+  salvageMagnetCost,
+  spend,
+} from './upgrades';
 import { carProgress, computeCarStats, getActiveCar, type CarState, type SlotId } from './vehicle';
 
-export type PurchaseKind = 'tier' | 'level' | 'salvageMagnet' | 'drone' | 'droneModel';
+export type PurchaseKind = 'tier' | 'level' | 'salvageMagnet' | 'drone' | 'droneModel' | 'droneBranch' | 'garage';
 
 export type GameEvents = {
   /** One fixed simulation step has run. */
@@ -83,9 +96,17 @@ export class GameModel {
   /** The drones flying on the farm right now (not saved). */
   readonly farmSim = new FarmSim(7);
 
+  /** True when a material's storage is full (drones and scavenging leave it alone). */
+  readonly isFull: FullCheck = (material: MaterialId) => isFull(this.state.resources, this.state.workshop, material);
+
+  /** Most drones the garage can run right now. */
+  maxDrones(): number {
+    return maxDrones(this.state.workshop);
+  }
+
   /** Average idle income right now: drone hauls plus the rare-material trickle. */
   incomeRates(): IncomeRates {
-    const farm = farmRates(this.state.farm);
+    const farm = farmRates(this.state.farm, this.isFull);
     const trickle = trickleRates(this.state.workshop.salvageMagnetLevel, carProgress(this.activeCar));
     return combineRates(
       { moneyPerSecond: farm.money, materialsPerSecond: farm.materials },
@@ -95,6 +116,8 @@ export class GameModel {
 
   /** Scavenges a deposit by hand. Returns what was found, or null if the deposit is bare. */
   scavenge(depositId: string): Haul | null {
+    const deposit = depositDef(depositId);
+    if (!deposit || this.isFull(deposit.material)) return null;
     const haul = scavengeDeposit(this.state.farm, depositId);
     if (!haul) return null;
     this.addEarnings(haul);
@@ -104,7 +127,30 @@ export class GameModel {
 
   /** Builds one more drone. Returns false if not possible. */
   buyDrone(): boolean {
-    return this.afterPurchase(buyDrone(this.state.farm, this.state.resources), 'drone', null);
+    return this.afterPurchase(buyDrone(this.state.farm, this.state.resources, this.maxDrones()), 'drone', null);
+  }
+
+  /** Buys the next level of a drone-tree branch. Returns false if not possible. */
+  buyDroneBranch(id: DroneBranchId): boolean {
+    return this.afterPurchase(buyDroneBranch(this.state.farm, id, this.state.resources), 'droneBranch', null);
+  }
+
+  /** Buys the next level of a garage upgrade. Returns false if not possible. */
+  buyGarageUpgrade(id: GarageUpgradeId): boolean {
+    const ok = buyGarageUpgrade(this.state.workshop, id, this.state.resources);
+    // A freshly built refinery starts on its first recipe.
+    if (ok && id === 'refinery' && !refineryRecipe(this.state.workshop.refineryRecipe)) this.state.workshop.refineryRecipe = 'aluminum';
+    return this.afterPurchase(ok, 'garage', null);
+  }
+
+  /** Picks what the refinery makes ('' stops it). Returns false for a recipe not unlocked yet. */
+  setRefineryRecipe(id: string): boolean {
+    const recipe = refineryRecipe(id);
+    if (id !== '' && (!recipe || recipe.level > this.state.workshop.refinery)) return false;
+    if (this.state.workshop.refineryRecipe !== id) this.state.workshop.refineryProgress = 0;
+    this.state.workshop.refineryRecipe = id;
+    this.save();
+    return true;
   }
 
   /** Upgrades every drone to the next model. Returns false if not possible. */
@@ -131,14 +177,15 @@ export class GameModel {
   }
 
   /** Fuel tanks right now (refilled up to the current time). */
-  fuel(): { tanks: number; msUntilNext: number } {
-    const fuel = refillFuel(this.state.run.fuel, this.now());
-    return { tanks: fuel.tanks, msUntilNext: msUntilNextTank(fuel, this.now()) };
+  fuel(): { tanks: number; msUntilNext: number; maxTanks: number; refillMs: number } {
+    const limits = fuelLimits(this.state.workshop);
+    const fuel = refillFuel(this.state.run.fuel, this.now(), limits);
+    return { tanks: fuel.tanks, msUntilNext: msUntilNextTank(fuel, this.now(), limits), ...limits };
   }
 
   /** Starts a drive run, using one fuel tank. Returns null if there is no fuel. */
   startRun(): RunState | null {
-    if (!useTank(this.state.run.fuel, this.now())) return null;
+    if (!useTank(this.state.run.fuel, this.now(), fuelLimits(this.state.workshop))) return null;
     this.save();
     const seed = this.state.createdAt + this.state.run.runsCompleted * 7919;
     return createRun(computeCarStats(this.activeCar), seed);
@@ -148,9 +195,10 @@ export class GameModel {
   finishRun(run: RunState): RunSummary {
     const record = this.state.run;
     const previousBestKm = record.bestDistanceKm;
-    const rewards = runRewards(run, previousBestKm);
-    this.state.resources.money += rewards.money + rewards.bonusMoney;
-    for (const id of MATERIAL_IDS) this.state.resources.materials[id] += rewards.finds[id];
+    const found = runRewards(run, previousBestKm);
+    this.state.resources.money += found.money + found.bonusMoney;
+    // Finds beyond the storage limit are left behind.
+    const rewards = { ...found, finds: storeMaterials(this.state.resources, this.state.workshop, found.finds) };
     record.bestDistanceKm = Math.max(previousBestKm, run.distanceKm);
     this.state.stats.distanceKm += run.distanceKm;
     record.runsCompleted += 1;
@@ -243,22 +291,28 @@ export class GameModel {
     for (const milestone of milestones) this.events.emit('milestoneReached', milestone);
   }
 
+  /** Adds money and materials; materials stop at the storage limits. */
   private addEarnings(earned: Earnings): void {
-    const { resources } = this.state;
-    resources.money += earned.money;
-    for (const id of MATERIAL_IDS) resources.materials[id] += earned.materials[id];
+    this.state.resources.money += earned.money;
+    storeMaterials(this.state.resources, this.state.workshop, earned.materials);
   }
 
   private tick(dtSeconds: number): void {
-    // Drones fly, mine and unload; what reaches the garage is added.
-    const haul = this.farmSim.step(this.state.farm, dtSeconds);
-    if (haul.money > 0 || MATERIAL_IDS.some((id) => haul.materials[id] > 0)) {
-      this.addEarnings(haul);
+    const { resources, workshop } = this.state;
+    // Drones fly, mine and unload; what reaches the garage is stored (and paid as scrap).
+    const unloaded = this.farmSim.step(this.state.farm, dtSeconds, this.isFull);
+    if (MATERIAL_IDS.some((id) => unloaded.materials[id] > 0)) {
+      const stored = storeMaterials(resources, workshop, unloaded.materials);
+      const haul = { money: haulValue(stored), materials: stored };
+      resources.money += haul.money;
       this.events.emit('hauled', haul);
     }
+    // The refinery works through its recipe.
+    stepRefinery(resources, workshop, dtSeconds);
     // The rare-material trickle.
-    const trickle = trickleRates(this.state.workshop.salvageMagnetLevel, carProgress(this.activeCar));
-    for (const id of MATERIAL_IDS) this.state.resources.materials[id] += trickle[id] * dtSeconds;
+    const trickle = trickleRates(workshop.salvageMagnetLevel, carProgress(this.activeCar));
+    for (const id of MATERIAL_IDS) trickle[id] *= dtSeconds;
+    storeMaterials(resources, workshop, trickle);
     this.state.stats.playTimeSeconds += dtSeconds;
     this.events.emit('tick', dtSeconds);
   }
@@ -268,15 +322,28 @@ export class GameModel {
    * as pending earnings for the player to collect.
    */
   private applyTimeAway(awaySeconds: number): void {
-    const earned = computeOfflineEarnings(this.incomeRates(), awaySeconds);
+    const { resources, workshop } = this.state;
+    const raw = computeOfflineEarnings(this.incomeRates(), awaySeconds);
     // Deposits regrow while the player is away.
     regrowDeposits(this.state.farm, awaySeconds);
-    if (earned.seconds <= 0) return;
+    if (raw.seconds <= 0) return;
+    const pending = this.state.pendingOffline;
+    // Storage fills up: hauls beyond the limit (counting earnings not yet collected) aren't made,
+    // so they earn no scrap money either.
+    const materials = fitToStorage(raw.materials, resources, workshop, pending.materials);
+    const lost = overflow(raw.materials, materials);
+    const earned = { ...raw, materials, money: Math.max(0, raw.money - haulValue(lost)) };
+    // The refinery runs while away too, on the materials already in storage.
+    const refined = stepRefinery(resources, workshop, raw.seconds);
     if (awaySeconds < ECONOMY.offline.minSecondsForSummary) {
       this.addEarnings(earned);
       return;
     }
-    const pending = this.state.pendingOffline;
+    // What the refinery made is shown in the summary, so it waits there with the rest.
+    for (const id of MATERIAL_IDS) {
+      resources.materials[id] -= refined.produced[id];
+      earned.materials[id] += refined.produced[id];
+    }
     pending.money += earned.money;
     for (const id of MATERIAL_IDS) pending.materials[id] += earned.materials[id];
     pending.seconds += earned.seconds;
@@ -284,4 +351,11 @@ export class GameModel {
     this.save();
     this.events.emit('offlineEarnings', { ...pending, materials: { ...pending.materials } });
   }
+}
+
+/** The part of `wanted` that didn't fit (`wanted − fitted`, never negative). */
+function overflow(wanted: Record<MaterialId, number>, fitted: Record<MaterialId, number>): Record<MaterialId, number> {
+  const lost = { ...wanted };
+  for (const id of MATERIAL_IDS) lost[id] = Math.max(0, wanted[id] - fitted[id]);
+  return lost;
 }

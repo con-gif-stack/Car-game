@@ -162,7 +162,7 @@ export const RUN_TUNING = {
   newBestBonus: 1,
 };
 
-/** Fuel tanks: each run uses one; they refill over time. */
+/** Fuel tanks: each run uses one; they refill over time. The Fuel Depot (garage.ts) improves both. */
 export const FUEL_TANKS = {
   max: 3,
   refillMinutes: 40,

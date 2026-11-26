@@ -35,8 +35,7 @@ export const TABS: readonly TabDef[] = [
     id: 'upgrades',
     label: 'Upgrades',
     sceneKey: 'UpgradesTab',
-    description: 'Drone upgrades, and later the skill tree.',
-    plannedStep: 'Step 7 · Drone upgrade tree',
+    description: 'The drone upgrade tree, and later the skill tree.',
   },
   {
     id: 'world',

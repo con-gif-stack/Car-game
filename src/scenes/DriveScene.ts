@@ -5,7 +5,7 @@ import { milestoneProgress, nextDistanceMilestone } from '../core/milestones';
 import { runCarFromStats, stepRun, type RunState } from '../core/run';
 import { computeCarStats } from '../core/vehicle';
 import { BIOMES, BIOMES_BY_ID, type BiomeId } from '../data/biomes';
-import { FUEL_TANKS } from '../data/economy';
+import { FUEL_DEPOT_LEVELS } from '../data/garage';
 import { MATERIAL_IDS, MATERIALS, RARITIES, type MaterialId } from '../data/materials';
 import { COLORS, TEXT_COLORS, UI_PIXEL } from '../ui/theme';
 import type { AppContext } from './context';
@@ -22,6 +22,8 @@ const PAD = 32;
 const PANEL_HEIGHT = 470;
 /** Space left at the bottom (the dev status line sits here). */
 const BOTTOM_PAD = 48;
+/** Most fuel tanks any Fuel Depot level stores. */
+const MAX_TANKS = Math.max(...FUEL_DEPOT_LEVELS.map((l) => l.maxTanks));
 /** Speedometer size in UI pixels. */
 const DIAL_PX = 38;
 
@@ -171,7 +173,8 @@ export class DriveScene extends Phaser.Scene {
 
     // Fuel tanks.
     add(this.add.text(left, top + 256, 'FUEL', textStyle(22, TEXT_COLORS.muted)).setOrigin(0, 0.5));
-    this.cans = new FuelCans(this, left + 90, top + 256, FUEL_TANKS.max);
+    // Room for the biggest Fuel Depot; cans beyond the current limit stay hidden.
+    this.cans = new FuelCans(this, left + 90, top + 256, MAX_TANKS);
     for (const obj of this.cans.objects) add(obj as Toggle);
     this.fuelText = add(this.add.text(this.cans.right + 12, top + 256, '', textStyle(24, TEXT_COLORS.secondary)).setOrigin(0, 0.5));
 
@@ -246,8 +249,9 @@ export class DriveScene extends Phaser.Scene {
     }
 
     const fuel = model.fuel();
-    const full = fuel.tanks >= FUEL_TANKS.max;
-    this.cans.set(fuel.tanks, full ? 1 : 1 - fuel.msUntilNext / (FUEL_TANKS.refillMinutes * 60_000));
+    const full = fuel.tanks >= fuel.maxTanks;
+    this.cans.set(fuel.tanks, full ? 1 : 1 - fuel.msUntilNext / fuel.refillMs, fuel.maxTanks);
+    this.fuelText.x = this.cans.rightFor(fuel.maxTanks) + 12;
     this.fuelText.setText(full ? 'Tanks full' : `Next in ${formatDuration(fuel.msUntilNext / 1000)}`);
     const canStart = fuel.tanks >= 1;
     this.startButton.setEnabled(canStart);

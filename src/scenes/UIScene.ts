@@ -2,7 +2,9 @@ import Phaser from 'phaser';
 import { formatDuration, formatNumber, formatPrecise } from '../core/format';
 import type { PendingOffline } from '../core/state';
 import { BIOMES_BY_ID } from '../data/biomes';
-import { ECONOMY, FUEL_TANKS } from '../data/economy';
+import { canAfford, droneBranchCost, droneModelCost } from '../core/upgrades';
+import { ECONOMY, type Cost } from '../data/economy';
+import { DRONE_BRANCHES } from '../data/farm';
 import { MATERIALS_BY_ID } from '../data/materials';
 import type { MilestoneDef } from '../data/milestones';
 import { MATERIALS, RARITIES } from '../data/materials';
@@ -60,6 +62,10 @@ export class UIScene extends Phaser.Scene {
   }
 
   create(): void {
+    this.ctx.showTab = (id) => {
+      const tab = TABS.find((t) => t.id === id);
+      if (tab) this.showTab(tab);
+    };
     this.createHud();
     this.createTabBar();
     if (import.meta.env.DEV) this.createDebugOverlay();
@@ -161,11 +167,22 @@ export class UIScene extends Phaser.Scene {
     }
   }
 
-  /** Drive tab gets a dot when every fuel tank is full (refills are being wasted). */
+  /**
+   * Tab dots: Drive when every fuel tank is full (refills are being wasted); Upgrades when a
+   * drone-tree level or the next drone model can be bought.
+   */
   private updateTabDots(): void {
-    const full = this.ctx.model.fuel().tanks >= FUEL_TANKS.max;
+    const { model } = this.ctx;
+    const fuel = model.fuel();
+    const full = fuel.tanks >= fuel.maxTanks;
+    const { farm, resources } = model.state;
+    const affordable = (cost: Cost | null) => cost !== null && canAfford(resources, cost);
+    const upgrade =
+      farm.droneCount > 0 &&
+      (affordable(droneModelCost(farm.droneModel)) || DRONE_BRANCHES.some((b) => affordable(droneBranchCost(farm, b.id))));
     for (const button of this.tabButtons) {
-      button.dot.setVisible(button.tab.id === 'drive' && full && this.activeTab?.id !== 'drive');
+      const wants = (button.tab.id === 'drive' && full) || (button.tab.id === 'upgrades' && upgrade);
+      button.dot.setVisible(wants && this.activeTab?.id !== button.tab.id);
     }
   }
 

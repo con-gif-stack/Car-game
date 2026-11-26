@@ -1,5 +1,6 @@
 import { createNewState, SAVE_VERSION, type GameState } from './state';
 import { repairFarm } from './farm';
+import { maxDrones } from './garage';
 import { repairBiomes, repairFeatures, repairMilestones } from './milestones';
 import { repairGarage } from './vehicle';
 
@@ -91,6 +92,10 @@ const MIGRATIONS: Record<number, (save: RawSave) => RawSave> = {
   // v4 → v5: the farm was added (deposits, drones, scavenging); its defaults are filled in on
   // load. Car idle-driving income was retired, so its pending distance is simply dropped.
   4: (save) => ({ ...save, version: 5 }),
+  // v5 → v6: the drone upgrade tree and garage upgrades (Drone Bays, Warehouse, Fuel Depot,
+  // Refinery) were added. All start at level 0, filled in on load. Materials already held
+  // above the new storage limits are kept; only new hauls stop at the limit.
+  5: (save) => ({ ...save, version: 6 }),
 };
 
 function isRecord(value: unknown): value is RawSave {
@@ -147,7 +152,7 @@ export function parseSave(raw: string, now: number): GameState | null {
     state.milestones = repairMilestones(migrated.milestones);
     state.unlockedBiomes = repairBiomes(migrated.unlockedBiomes);
     state.unlockedFeatures = repairFeatures(migrated.unlockedFeatures);
-    state.farm = repairFarm(state.farm);
+    state.farm = repairFarm(state.farm, maxDrones(state.workshop));
     state.version = SAVE_VERSION;
     return state;
   } catch {

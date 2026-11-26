@@ -213,14 +213,15 @@ export class FuelCans {
     this.objects.push(...this.refill.objects);
   }
 
-  /** `tanks` full; `progress` (0–1) towards the next one. */
-  set(tanks: number, progress: number): void {
+  /** `tanks` full out of `max` stored; `progress` (0–1) towards the next one. */
+  set(tanks: number, progress: number, max = this.cans.length): void {
     this.cans.forEach((can, i) => {
       const full = i < tanks;
+      can.setVisible(i < max);
       can.setAlpha(full ? 1 : 0.25);
       can.setTint(full ? 0xffffff : 0x8a84b4);
     });
-    const refilling = tanks < this.cans.length;
+    const refilling = tanks < max;
     this.refill.setVisible(refilling);
     if (refilling) {
       this.refill.track.x = this.x + tanks * this.spacing;
@@ -232,6 +233,11 @@ export class FuelCans {
   /** Right edge, for placing text after the cans. */
   get right(): number {
     return this.x + this.cans.length * this.spacing;
+  }
+
+  /** Right edge when only `count` cans show. */
+  rightFor(count: number): number {
+    return this.x + Math.min(count, this.cans.length) * this.spacing;
   }
 
   get centerY(): number {

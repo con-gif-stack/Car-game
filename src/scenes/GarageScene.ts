@@ -1,7 +1,9 @@
 import Phaser from 'phaser';
 import { formatDistance } from '../core/format';
 import type { PurchaseKind } from '../core/GameModel';
-import { canAfford, levelUpCost, nextTierPart, tierCost } from '../core/upgrades';
+import { garageUpgradeCost } from '../core/garage';
+import { canAfford, levelUpCost, nextTierPart, salvageMagnetCost, tierCost } from '../core/upgrades';
+import { GARAGE_UPGRADES } from '../data/garage';
 import { computeCarStats, getInstalledPart, type SlotDef, type SlotId } from '../core/vehicle';
 import { PART_LEVELS } from '../data/economy';
 import { CAR_MODELS, QUALITIES, SLOTS, STATS } from '../data/vehicles';
@@ -9,7 +11,7 @@ import { COLORS, TEXT_COLORS } from '../ui/theme';
 import type { AppContext } from './context';
 import { DriveView } from './DriveView';
 import { cssColor } from './panel';
-import { openPartPanel, openWorkshopPanel, panelSignature } from './panels';
+import { openPartPanel, openWorkshopPanel, panelSignature, type WorkshopPage } from './panels';
 import { fontPx, overlayStyle, textStyle, wrapStyle } from './textStyles';
 import { addButton, addDot, addFrame, PixelBar, restyleFrame } from './ui';
 
@@ -41,7 +43,7 @@ interface PartCard {
   badge: Phaser.GameObjects.Image;
 }
 
-type OpenPanel = { kind: 'part'; slot: SlotDef } | { kind: 'workshop' };
+type OpenPanel = { kind: 'part'; slot: SlotDef } | { kind: 'workshop'; page: WorkshopPage };
 
 const text = textStyle;
 const overlayText = overlayStyle;
@@ -59,6 +61,7 @@ export class GarageScene extends Phaser.Scene {
   private bestRunText!: Phaser.GameObjects.Text;
 
   private panel: Phaser.GameObjects.Container | null = null;
+  private workshopDot: Phaser.GameObjects.Image | null = null;
   private openPanel: OpenPanel | null = null;
   private panelSignature = '';
   private panelTimer = 0;
@@ -161,6 +164,10 @@ export class GarageScene extends Phaser.Scene {
         (next !== null && canAfford(resources, tierCost(next))) || (levelCost !== null && canAfford(resources, levelCost));
       card.badge.setVisible(affordable);
     }
+    // Workshop: a dot when any garage upgrade or the magnet can be bought.
+    const { workshop } = this.ctx.model.state;
+    const costs = [...GARAGE_UPGRADES.map((u) => garageUpgradeCost(workshop, u.id)), salvageMagnetCost(workshop.salvageMagnetLevel)];
+    this.workshopDot?.setVisible(costs.some((c) => c !== null && canAfford(resources, c)));
   }
 
   private onPurchased(kind: PurchaseKind, slot: SlotId | null): void {
@@ -171,6 +178,8 @@ export class GarageScene extends Phaser.Scene {
       if (part) this.showPopup(`${part.name} installed!`, QUALITIES[part.quality].color);
     } else if (kind === 'level' && slot) {
       this.showPopup(`Level ${this.ctx.model.activeCar.parts[slot]?.level ?? ''}!`, COLORS.accentAlt);
+    } else if (kind === 'garage') {
+      this.showPopup('Garage upgraded!', COLORS.accentAlt);
     } else if (kind === 'salvageMagnet') {
       this.showPopup('Magnet upgraded!', COLORS.accentAlt);
     }
@@ -241,10 +250,11 @@ export class GarageScene extends Phaser.Scene {
     // Workshop button: garage-wide upgrades.
     const buttonWidth = 220;
     addButton(this, width - PAD - buttonWidth / 2, y + 22, buttonWidth, 48, 'Workshop', {
-      onClick: () => this.showPanel({ kind: 'workshop' }),
+      onClick: () => this.showPanel({ kind: 'workshop', page: 'menu' }),
       tone: 'secondary',
       fontSize: 24,
     });
+    this.workshopDot = addDot(this, width - PAD - 8, y + 2).setVisible(false);
 
     const cardWidth = (width - 2 * PAD - (CARD_COLUMNS - 1) * CARD_GAP) / CARD_COLUMNS;
     SLOTS.forEach((slot, i) => {
@@ -275,7 +285,7 @@ export class GarageScene extends Phaser.Scene {
   /** Opens (or redraws) a panel over the tab. */
   private showPanel(which: OpenPanel): void {
     // Only pop in when newly opened, not when redrawing the panel already on screen.
-    const key = (p: OpenPanel | null) => (p ? (p.kind === 'part' ? p.slot.id : p.kind) : '');
+    const key = (p: OpenPanel | null) => (p ? (p.kind === 'part' ? p.slot.id : `${p.kind}/${p.page}`) : '');
     const animate = key(this.openPanel) !== key(which);
     this.panel?.destroy();
     this.openPanel = which;
@@ -286,7 +296,9 @@ export class GarageScene extends Phaser.Scene {
     this.panel =
       which.kind === 'part'
         ? openPartPanel(this, this.ctx.model, which.slot, area, close, animate)
-        : openWorkshopPanel(this, this.ctx.model, area, close, animate);
+        : openWorkshopPanel(this, this.ctx.model, area, close, animate, which.page, (page) =>
+            this.showPanel({ kind: 'workshop', page }),
+          );
   }
 
   private closePanel(): void {

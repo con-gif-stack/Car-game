@@ -171,37 +171,45 @@ export interface FuelState {
   lastRefillAt: number;
 }
 
-const REFILL_MS = () => FUEL_TANKS.refillMinutes * 60_000;
+/** How many tanks can be stored and how long each takes to refill (the Fuel Depot raises both). */
+export interface FuelLimits {
+  maxTanks: number;
+  refillMs: number;
+}
+
+export const BASE_FUEL_LIMITS: FuelLimits = { maxTanks: FUEL_TANKS.max, refillMs: FUEL_TANKS.refillMinutes * 60_000 };
 
 /** Adds any tanks that have refilled by `now` (in place). Full tanks keep the timer at `now`. */
-export function refillFuel(fuel: FuelState, now: number): FuelState {
-  if (fuel.tanks >= FUEL_TANKS.max) {
-    fuel.tanks = FUEL_TANKS.max;
+export function refillFuel(fuel: FuelState, now: number, limits: FuelLimits = BASE_FUEL_LIMITS): FuelState {
+  const { maxTanks, refillMs } = limits;
+  if (fuel.tanks >= maxTanks) {
+    // A bigger depot never takes tanks away; a smaller limit (not possible today) would.
+    fuel.tanks = Math.min(fuel.tanks, maxTanks);
     fuel.lastRefillAt = now;
     return fuel;
   }
   // A clock moved backwards restarts the timer rather than granting or losing tanks.
   if (now < fuel.lastRefillAt) fuel.lastRefillAt = now;
-  const refilled = Math.floor((now - fuel.lastRefillAt) / REFILL_MS());
+  const refilled = Math.floor((now - fuel.lastRefillAt) / refillMs);
   if (refilled > 0) {
-    fuel.tanks = Math.min(FUEL_TANKS.max, fuel.tanks + refilled);
-    fuel.lastRefillAt = fuel.tanks >= FUEL_TANKS.max ? now : fuel.lastRefillAt + refilled * REFILL_MS();
+    fuel.tanks = Math.min(maxTanks, fuel.tanks + refilled);
+    fuel.lastRefillAt = fuel.tanks >= maxTanks ? now : fuel.lastRefillAt + refilled * refillMs;
   }
   return fuel;
 }
 
 /** Milliseconds until the next tank refills, or 0 when full. */
-export function msUntilNextTank(fuel: FuelState, now: number): number {
-  if (fuel.tanks >= FUEL_TANKS.max) return 0;
-  return Math.max(0, fuel.lastRefillAt + REFILL_MS() - now);
+export function msUntilNextTank(fuel: FuelState, now: number, limits: FuelLimits = BASE_FUEL_LIMITS): number {
+  if (fuel.tanks >= limits.maxTanks) return 0;
+  return Math.max(0, fuel.lastRefillAt + limits.refillMs - now);
 }
 
 /** Uses one tank. Returns false if none is left. */
-export function useTank(fuel: FuelState, now: number): boolean {
-  refillFuel(fuel, now);
+export function useTank(fuel: FuelState, now: number, limits: FuelLimits = BASE_FUEL_LIMITS): boolean {
+  refillFuel(fuel, now, limits);
   if (fuel.tanks < 1) return false;
   // Starting from full: the refill timer starts now.
-  if (fuel.tanks >= FUEL_TANKS.max) fuel.lastRefillAt = now;
+  if (fuel.tanks >= limits.maxTanks) fuel.lastRefillAt = now;
   fuel.tanks -= 1;
   return true;
 }

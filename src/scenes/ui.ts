@@ -1,6 +1,6 @@
 import Phaser from 'phaser';
 import { buildBarFill, buildFrame, buildGlow, buildRule, type FrameKind } from '../art/uiArt';
-import { buildUiIcon, HUD_ICON_COLORS, type HudIcon, type UiIcon } from '../art/uiIcons';
+import { buildUiIcon, HUD_ICON_COLORS, UPGRADE_ICON_COLORS, type HudIcon, type UiIcon, type UpgradeIcon } from '../art/uiIcons';
 import { COLORS, TEXT_COLORS, UI_PIXEL } from '../ui/theme';
 import { textStyle } from './textStyles';
 import { ensureGridTexture } from './textures';
@@ -65,7 +65,7 @@ export function addRule(scene: Phaser.Scene, x: number, y: number, width: number
 
 /** Texture key for an interface icon. HUD icons default to their own colour. */
 export function uiIconKey(scene: Phaser.Scene, icon: UiIcon, color?: number): string {
-  const c = color ?? HUD_ICON_COLORS[icon as HudIcon] ?? COLORS.textSecondary;
+  const c = color ?? HUD_ICON_COLORS[icon as HudIcon] ?? UPGRADE_ICON_COLORS[icon as UpgradeIcon] ?? COLORS.textSecondary;
   const key = `ui/icon/${icon}/${c.toString(16)}`;
   ensureGridTexture(scene, key, () => buildUiIcon(icon, c));
   return key;

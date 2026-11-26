@@ -9,7 +9,7 @@ import { createStarterGarage, type GarageState } from './vehicle';
  * The save-file version. Bump it whenever the shape of GameState changes in a way that
  * needs converting old saves, and add a migration in save.ts.
  */
-export const SAVE_VERSION = 5;
+export const SAVE_VERSION = 6;
 
 export type MaterialStock = Record<MaterialId, number>;
 
@@ -66,6 +66,19 @@ export interface RunRecord {
 export interface WorkshopState {
   /** Salvage Magnet level: boosts the idle trickle of Rare-and-above materials. */
   salvageMagnetLevel: number;
+  /** Garage upgrade levels (see src/data/garage.ts). */
+  droneBays: number;
+  warehouse: number;
+  fuelDepot: number;
+  refinery: number;
+  /** Id of the refinery recipe running ('' = none). */
+  refineryRecipe: string;
+  /** Batches done so far towards the next one (0–1). */
+  refineryProgress: number;
+}
+
+export function createWorkshopState(): WorkshopState {
+  return { salvageMagnetLevel: 0, droneBays: 0, warehouse: 0, fuelDepot: 0, refinery: 0, refineryRecipe: '', refineryProgress: 0 };
 }
 
 /** Earnings (money and materials) over some period. */
@@ -93,7 +106,7 @@ export function createNewState(now: number): GameState {
     resources: emptyResources(),
     garage: createStarterGarage(),
     pendingOffline: emptyPendingOffline(),
-    workshop: { salvageMagnetLevel: 0 },
+    workshop: createWorkshopState(),
     farm: createFarmState(),
     run: { bestDistanceKm: 0, runsCompleted: 0, fuel: { tanks: FUEL_TANKS.max, lastRefillAt: now } },
     milestones: [],

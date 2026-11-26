@@ -1,15 +1,31 @@
 import { formatPrecise } from '../core/format';
-import { DEPOSITS, farmRates, scavenge } from '../core/farm';
+import { branchLevel, DEPOSITS, farmRates, haulValue, inReach, scavenge } from '../core/farm';
+import {
+  fitToStorage,
+  fuelLimits,
+  garageLevel,
+  garageUpgradeCost,
+  isFull,
+  maxDrones,
+  refineryRecipes,
+  stepRefinery,
+  storageCap,
+  storeMaterials,
+} from '../core/garage';
 import { combineRates, computeOfflineEarnings, trickleRates, type IncomeRates } from '../core/idle';
 import { checkMilestones } from '../core/milestones';
 import { runRewards, simulateRun, useTank } from '../core/run';
 import { createNewState, type Resources } from '../core/state';
 import {
+  buyDroneBranch,
+  buyGarageUpgrade,
   buyLevelUp,
   buyNextTier,
   buyDrone,
   buyDroneModel,
   canAfford,
+  costMaterials,
+  droneBranchCost,
   droneBuildCost,
   droneModelCost,
   levelUpCost,
@@ -20,9 +36,10 @@ import {
 } from '../core/upgrades';
 import { carProgress, computeCarStats, getActiveCar, getPart, type CarState, type QualityId } from '../core/vehicle';
 import { BIOMES } from '../data/biomes';
-import { ECONOMY, FUEL_TANKS, type Cost } from '../data/economy';
-import { MATERIAL_IDS, MATERIALS } from '../data/materials';
-import { DRONE_MODELS } from '../data/farm';
+import { ECONOMY, type Cost } from '../data/economy';
+import { MATERIAL_IDS, MATERIALS, type MaterialId } from '../data/materials';
+import { DRONE_BRANCHES, DRONE_MODELS } from '../data/farm';
+import { GARAGE_UPGRADES, type GarageUpgradeId } from '../data/garage';
 import { QUALITIES, SLOTS, TIER_ORDER } from '../data/vehicles';
 
 /*
@@ -48,7 +65,7 @@ export const PROFILES: readonly PlayerProfile[] = [
 
 export interface Purchase {
   day: number;
-  kind: 'tier' | 'level' | 'magnet' | 'drone';
+  kind: 'tier' | 'level' | 'magnet' | 'drone' | 'tree' | 'garage';
   label: string;
 }
 
@@ -86,6 +103,8 @@ interface Option {
   label: string;
   cost: Cost;
   buy: () => boolean;
+  /** Bought as soon as it's affordable (it grows income or unblocks something). */
+  priority?: boolean;
 }
 
 function lowestRank(car: CarState): number {
@@ -108,7 +127,8 @@ export function simulate(profile: PlayerProfile, maxDays = 180): SimResult {
   const state = createNewState(0);
   const car = getActiveCar(state.garage);
   const resources = state.resources;
-  let magnetLevel = 0;
+  const workshop = state.workshop;
+  const full = (id: MaterialId) => isFull(resources, workshop, id);
   let t = 0;
   let runsDriven = 0;
   const biomeDays = new Map<string, number>([[BIOMES[0]?.id ?? '', 0]]);
@@ -118,10 +138,10 @@ export function simulate(profile: PlayerProfile, maxDays = 180): SimResult {
   const turboMilestone: Milestone = { label: 'First turbo fitted', day: null };
 
   const rates = (): IncomeRates => {
-    const farm = farmRates(state.farm);
+    const farm = farmRates(state.farm, full);
     return combineRates(
       { moneyPerSecond: farm.money, materialsPerSecond: farm.materials },
-      { moneyPerSecond: 0, materialsPerSecond: trickleRates(magnetLevel, carProgress(car)) },
+      { moneyPerSecond: 0, materialsPerSecond: trickleRates(workshop.salvageMagnetLevel, carProgress(car)) },
     );
   };
   /** Scavenging by hand: a few taps on the deposits at each check-in (the first unlocks drones). */
@@ -129,31 +149,33 @@ export function simulate(profile: PlayerProfile, maxDays = 180): SimResult {
     const taps = profile.tapsPerCheckIn ?? 25;
     for (let i = 0; i < taps; i++) {
       const deposit = DEPOSITS[i % DEPOSITS.length];
-      const haul = deposit ? scavenge(state.farm, deposit.id) : null;
+      if (!deposit || !inReach(state.farm, deposit) || full(deposit.material)) continue;
+      const haul = scavenge(state.farm, deposit.id);
       if (!haul) continue;
       resources.money += haul.money;
-      for (const id of MATERIAL_IDS) resources.materials[id] += haul.materials[id];
+      storeMaterials(resources, workshop, haul.materials);
     }
   };
+  /** Idle earnings over a stretch of time, stopping at the storage limits, plus the refinery. */
   const earn = (seconds: number, offline: boolean) => {
     const r = rates();
-    if (offline) {
-      const earned = computeOfflineEarnings(r, seconds);
-      resources.money += earned.money;
-      for (const id of MATERIAL_IDS) resources.materials[id] += earned.materials[id];
-    } else {
-      resources.money += r.moneyPerSecond * seconds;
-      for (const id of MATERIAL_IDS) resources.materials[id] += r.materialsPerSecond[id] * seconds;
-    }
+    const earned = offline
+      ? computeOfflineEarnings(r, seconds)
+      : { seconds, money: r.moneyPerSecond * seconds, materials: Object.fromEntries(MATERIAL_IDS.map((id) => [id, r.materialsPerSecond[id] * seconds])) as Record<MaterialId, number> };
+    const fitted = fitToStorage(earned.materials, resources, workshop);
+    const lost = Object.fromEntries(MATERIAL_IDS.map((id) => [id, earned.materials[id] - fitted[id]])) as Record<MaterialId, number>;
+    resources.money += Math.max(0, earned.money - haulValue(lost));
+    for (const id of MATERIAL_IDS) resources.materials[id] += fitted[id];
+    stepRefinery(resources, workshop, earned.seconds);
   };
 
   /** Spends every fuel tank available now on drive runs, collecting rewards and milestones. */
   const driveRuns = () => {
-    while (useTank(state.run.fuel, t * 1000)) {
+    while (useTank(state.run.fuel, t * 1000, fuelLimits(workshop))) {
       const run = simulateRun(computeCarStats(car), 1000 + runsDriven);
       const rewards = runRewards(run, state.run.bestDistanceKm);
       resources.money += rewards.money + rewards.bonusMoney;
-      for (const id of MATERIAL_IDS) resources.materials[id] += rewards.finds[id];
+      storeMaterials(resources, workshop, rewards.finds);
       state.run.bestDistanceKm = Math.max(state.run.bestDistanceKm, run.distanceKm);
       state.run.runsCompleted += 1;
       runsDriven += 1;
@@ -189,13 +211,15 @@ export function simulate(profile: PlayerProfile, maxDays = 180): SimResult {
       }
     }
     const farm = state.farm;
-    const buildCost = farm.droneCount >= 1 ? droneBuildCost(farm.droneCount) : null;
+    const limit = maxDrones(workshop);
+    const buildCost = farm.droneCount >= 1 ? droneBuildCost(farm.droneCount, limit) : null;
     if (buildCost) {
       list.push({
         kind: 'drone',
         label: `Drone #${farm.droneCount + 1}`,
         cost: buildCost,
-        buy: () => buyDrone(farm, resources),
+        buy: () => buyDrone(farm, resources, limit),
+        priority: true,
       });
     }
     const modelCost = farm.droneCount >= 1 ? droneModelCost(farm.droneModel) : null;
@@ -205,18 +229,77 @@ export function simulate(profile: PlayerProfile, maxDays = 180): SimResult {
         label: DRONE_MODELS[farm.droneModel + 1]?.name ?? 'Drone model',
         cost: modelCost,
         buy: () => buyDroneModel(farm, resources),
+        priority: true,
       });
     }
-    const magnetCost = salvageMagnetCost(magnetLevel);
+    if (farm.droneCount >= 1) {
+      for (const branch of DRONE_BRANCHES) {
+        const cost = droneBranchCost(farm, branch.id);
+        if (!cost) continue;
+        list.push({
+          kind: 'tree',
+          label: `${branch.name} ${branchLevel(farm, branch.id) + 1}`,
+          cost,
+          buy: () => buyDroneBranch(farm, branch.id, resources),
+          // Range opens new piles; the other branches come out of spare money.
+          priority: branch.id === 'range',
+        });
+      }
+    }
+    const magnetCost = salvageMagnetCost(workshop.salvageMagnetLevel);
     if (magnetCost) {
       list.push({
         kind: 'magnet',
-        label: `Salvage Magnet level ${magnetLevel + 1}`,
+        label: `Salvage Magnet level ${workshop.salvageMagnetLevel + 1}`,
         cost: magnetCost,
-        buy: () => spend(resources, magnetCost) && (magnetLevel += 1) > 0,
+        buy: () => spend(resources, magnetCost) && (workshop.salvageMagnetLevel += 1) > 0,
+      });
+    }
+    for (const upgrade of GARAGE_UPGRADES) {
+      const cost = garageUpgradeCost(workshop, upgrade.id);
+      if (!cost) continue;
+      list.push({
+        kind: 'garage',
+        label: `${upgrade.name} ${garageLevel(workshop, upgrade.id) + 1}`,
+        cost,
+        buy: () => buyGarageUpgrade(workshop, upgrade.id, resources) && pickRecipe(),
+        priority: garagePriority(upgrade.id, list),
       });
     }
     return list;
+  };
+
+  /** Most of a material any upcoming purchase needs (to know when storage is too small). */
+  const neededBy = (list: Option[]) => {
+    const need: Partial<Record<MaterialId, number>> = {};
+    for (const option of list) {
+      if (option.kind !== 'tier' && option.kind !== 'drone' && !(option.kind === 'tree' && option.priority)) continue;
+      for (const [id, amount] of costMaterials(option.cost)) need[id] = Math.max(need[id] ?? 0, amount);
+    }
+    return need;
+  };
+
+  /** When a garage upgrade is urgent: bays at the drone limit, a full warehouse or one too small for what's next. */
+  const garagePriority = (id: GarageUpgradeId, list: Option[]) => {
+    if (id === 'droneBays') return state.farm.droneCount >= 1 && state.farm.droneCount >= maxDrones(workshop);
+    if (id === 'warehouse') {
+      // Full storage stops the drones (and their money), so make room straight away.
+      const need = neededBy(list);
+      return MATERIAL_IDS.some((m) => (need[m] ?? 0) > storageCap(workshop, m) || full(m));
+    }
+    return false;
+  };
+
+  /** Runs the refinery on whatever the next purchases lack most, rarest first. */
+  const pickRecipe = () => {
+    const recipes = refineryRecipes(garageLevel(workshop, 'refinery'));
+    if (recipes.length === 0) return true;
+    const need = neededBy(options());
+    const lacking = (m: MaterialId) => (need[m] ?? 0) > resources.materials[m];
+    const byRarity = [...recipes].reverse();
+    const choice = byRarity.find((r) => Object.keys(r.outputs).some((m) => lacking(m as MaterialId))) ?? recipes.find((r) => r.id === 'aluminum');
+    if (choice) workshop.refineryRecipe = choice.id;
+    return true;
   };
 
   /**
@@ -230,12 +313,12 @@ export function simulate(profile: PlayerProfile, maxDays = 180): SimResult {
       const byMoney = (a: Option, b: Option) => (a.cost.money ?? 0) - (b.cost.money ?? 0);
       const tiers = all.filter((o) => o.kind === 'tier').sort(byMoney);
       const affordableTier = tiers.find((o) => canAfford(resources, o.cost));
-      const affordableDrone = all.filter((o) => o.kind === 'drone').sort(byMoney).find((o) => canAfford(resources, o.cost));
+      const affordableDrone = all.filter((o) => o.priority).sort(byMoney).find((o) => canAfford(resources, o.cost));
       let pick = affordableTier ?? affordableDrone;
       if (!pick) {
         const goal = tiers.find((o) => canAfford({ ...resources, money: Infinity }, o.cost));
         const surplus = minus(resources, goal?.cost ?? {});
-        pick = all.filter((o) => (o.kind === 'level' || o.kind === 'magnet') && canAfford(surplus, o.cost)).sort(byMoney)[0];
+        pick = all.filter((o) => o.kind !== 'tier' && !o.priority && canAfford(surplus, o.cost)).sort(byMoney)[0];
       }
       if (!pick || !pick.buy()) return;
       purchases.push({ day: t / DAY, kind: pick.kind, label: pick.label });
@@ -261,6 +344,7 @@ export function simulate(profile: PlayerProfile, maxDays = 180): SimResult {
     checkMilestones(state);
     driveRuns();
     shop();
+    pickRecipe();
     driveRuns();
     checkMilestones(state);
     recordMilestones();
@@ -317,8 +401,9 @@ export function formatReport(result: SimResult): string {
   const lines: string[] = [];
   const p = result.profile;
   lines.push(`=== ${p.name} player: ${p.checkInsPerDay} check-ins a day, ${p.sessionMinutes} min each ===`);
+  const fuel = fuelLimits(createNewState(0).workshop);
   lines.push(
-    `Offline cap ${ECONOMY.offline.capHours}h · fuel: ${FUEL_TANKS.max} tanks, one per ${FUEL_TANKS.refillMinutes} min`,
+    `Offline cap ${ECONOMY.offline.capHours}h · fuel to start: ${fuel.maxTanks} tanks, one per ${fuel.refillMs / 60_000} min`,
   );
   lines.push('');
   lines.push(`Biomes reached on runs (${result.runsDriven} runs, best ${result.bestDistanceKm.toFixed(1)} km):`);
@@ -334,13 +419,26 @@ export function formatReport(result: SimResult): string {
   for (const purchase of result.purchases.filter((x) => x.kind === 'tier')) {
     lines.push(`  ${fmtDay(purchase.day).padEnd(10)} ${purchase.label}`);
   }
-  const counts = { level: 0, magnet: 0, drone: 0 };
+  const counts = { level: 0, magnet: 0, drone: 0, tree: 0, garage: 0 };
   for (const purchase of result.purchases) if (purchase.kind !== 'tier') counts[purchase.kind] += 1;
-  lines.push(`  (plus ${counts.level} part levels, ${counts.magnet} Salvage Magnet levels and ${counts.drone} drone upgrades)`);
-  lines.push('Drone upgrades:');
-  for (const purchase of result.purchases.filter((x) => x.kind === 'drone')) {
+  lines.push(
+    `  (plus ${counts.level} part levels, ${counts.magnet} Salvage Magnet levels, ${counts.drone} drones and models, ` +
+      `${counts.tree} drone-tree levels and ${counts.garage} garage upgrades)`,
+  );
+  lines.push('Drones, models and Range:');
+  for (const purchase of result.purchases.filter((x) => x.kind === 'drone' || (x.kind === 'tree' && x.label.startsWith('Range')))) {
     lines.push(`  ${fmtDay(purchase.day).padEnd(10)} ${purchase.label}`);
   }
+  lines.push('Garage upgrades:');
+  for (const purchase of result.purchases.filter((x) => x.kind === 'garage')) {
+    lines.push(`  ${fmtDay(purchase.day).padEnd(10)} ${purchase.label}`);
+  }
+  const tree = result.purchases.filter((x) => x.kind === 'tree' && !x.label.startsWith('Range'));
+  const last = new Map<string, Purchase>();
+  for (const purchase of tree) last.set(purchase.label.replace(/ \d+$/, ''), purchase);
+  lines.push(
+    'Drone tree reached: ' + ([...last.values()].map((x) => `${x.label} (${fmtDay(x.day)})`).join(', ') || 'nothing'),
+  );
   lines.push('');
   lines.push(
     `Longest wait between part tiers: ${result.longestTierWait.days.toFixed(2)} days (ending with ${result.longestTierWait.endedWith})`,

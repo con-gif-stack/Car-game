@@ -1,20 +1,20 @@
 import Phaser from 'phaser';
 import { buildDeposit, buildDrone, buildFarmGround, buildGarage, buildWreck, depositStage, drawTracks } from '../art/farmArt';
 import type { Haul } from '../core/farm';
-import { DEPOSITS, farmRates } from '../core/farm';
+import { DEPOSITS, farmRates, inReach } from '../core/farm';
 import { formatNumber, formatPrecise } from '../core/format';
 import type { PurchaseKind } from '../core/GameModel';
-import { canAfford, droneBuildCost, droneModelCost } from '../core/upgrades';
+import { canAfford, droneBuildCost } from '../core/upgrades';
 import { DRONE_MODELS, GARAGE_POSITION, MAP_HEIGHT, MAP_WIDTH } from '../data/farm';
 import { MATERIAL_IDS, MATERIALS_BY_ID, RARITIES } from '../data/materials';
 import { MILESTONES_BY_ID } from '../data/milestones';
-import { COLORS, TEXT_COLORS } from '../ui/theme';
+import { COLORS, TEXT_COLORS, UI_PIXEL } from '../ui/theme';
 import type { AppContext } from './context';
 import { cssColor } from './panel';
 import { openDroneBayPanel, panelSignature } from './panels';
 import { overlayStyle, textStyle } from './textStyles';
 import { ensureGridTexture } from './textures';
-import { addButton, addDot, addFrame, PixelBar, type PixelButton } from './ui';
+import { addButton, addDot, addFrame, PixelBar, uiIconKey, type PixelButton } from './ui';
 
 const PAD = 32;
 /** Height of the info panel under the map. */
@@ -57,6 +57,7 @@ export class FarmScene extends Phaser.Scene {
   private k = 1;
   private readonly depositImages = new Map<string, Phaser.GameObjects.Image>();
   private readonly depositStages = new Map<string, number>();
+  private readonly lockIcons = new Map<string, Phaser.GameObjects.Image>();
   private readonly droneSprites: DroneSprite[] = [];
   private garagePoint = { x: 0, y: 0 };
 
@@ -109,6 +110,7 @@ export class FarmScene extends Phaser.Scene {
     if (this.refreshTimer >= 0.3) {
       this.refreshTimer = 0;
       this.refreshDeposits();
+      this.refreshLocks();
       this.refreshInfo();
       const signature = panelSignature(this.ctx.model);
       if (this.panel && signature !== this.panelSignature) this.showDroneBay();
@@ -157,6 +159,25 @@ export class FarmScene extends Phaser.Scene {
       image.setInteractive({ useHandCursor: true });
       image.on('pointerdown', () => this.scavenge(deposit.id));
       this.depositImages.set(deposit.id, image);
+      if (deposit.range > 0) {
+        const lock = this.add.image(s.x, s.y - 70, uiIconKey(this, 'lock')).setScale(UI_PIXEL * 0.75).setDepth(s.y + 1);
+        this.lockIcons.set(deposit.id, lock);
+      }
+    }
+    this.refreshLocks();
+  }
+
+  /** Far piles out of the drones' Range are dimmed and show a lock. */
+  private refreshLocks(): void {
+    const farm = this.ctx.model.state.farm;
+    for (const deposit of DEPOSITS) {
+      const reachable = inReach(farm, deposit);
+      const image = this.depositImages.get(deposit.id);
+      if (image) {
+        if (reachable) image.clearTint().setAlpha(1);
+        else image.setTint(0x6a6490).setAlpha(0.7);
+      }
+      this.lockIcons.get(deposit.id)?.setVisible(!reachable);
     }
   }
 
@@ -183,9 +204,18 @@ export class FarmScene extends Phaser.Scene {
 
   private scavenge(depositId: string): void {
     if (this.panel) return;
-    const haul = this.ctx.model.scavenge(depositId);
     const image = this.depositImages.get(depositId);
-    if (!image) return;
+    const deposit = DEPOSITS.find((d) => d.id === depositId);
+    if (!image || !deposit) return;
+    if (!inReach(this.ctx.model.state.farm, deposit)) {
+      this.popup(image.x, image.y - 50, `Out of reach: needs Range ${deposit.range}`, COLORS.textSecondary);
+      return;
+    }
+    if (this.ctx.model.isFull(deposit.material)) {
+      this.popup(image.x, image.y - 50, `${MATERIALS_BY_ID[deposit.material].name} storage is full`, COLORS.accentWarm);
+      return;
+    }
+    const haul = this.ctx.model.scavenge(depositId);
     // A little squash so the tap feels physical.
     this.tweens.killTweensOf(image);
     image.setScale(DEPOSIT_SCALE);
@@ -216,8 +246,9 @@ export class FarmScene extends Phaser.Scene {
   }
 
   private onPurchased(kind: PurchaseKind): void {
-    if (kind === 'drone' || kind === 'droneModel') {
-      this.cameras.main.flash(160, 255, 255, 255, false);
+    if (kind === 'drone' || kind === 'droneModel') this.cameras.main.flash(160, 255, 255, 255, false);
+    if (kind === 'drone' || kind === 'droneModel' || kind === 'droneBranch' || kind === 'garage') {
+      this.refreshLocks();
       this.refreshInfo();
     }
   }
@@ -311,18 +342,24 @@ export class FarmScene extends Phaser.Scene {
 
     this.stopHints();
     const model = DRONE_MODELS[farm.droneModel];
-    const rates = farmRates(farm);
+    const rates = farmRates(farm, this.ctx.model.isFull);
     const units = MATERIAL_IDS.reduce((sum, id) => sum + rates.materials[id], 0);
     this.titleText.setText('DRONES');
     this.mainText.setText(`${farm.droneCount} × ${model?.name ?? 'Drone'}`);
-    this.subText.setText(`+${formatPrecise(units * 3600)} materials/h · +${formatPrecise(rates.money * 3600)} money/h. Tap piles to help out.`);
+    // Drones leave full materials alone: say so, since it stops their money too.
+    const full = [...new Set(DEPOSITS.filter((d) => inReach(farm, d) && this.ctx.model.isFull(d.material)).map((d) => d.material))];
+    this.subText.setText(
+      full.length
+        ? `Storage full: ${full.map((id) => MATERIALS_BY_ID[id].name).join(', ')}. Spend it or build a bigger Warehouse in the Garage.`
+        : `+${formatPrecise(units * 3600)} materials/h · +${formatPrecise(rates.money * 3600)} money/h. Tap piles to help out.`,
+    );
+    this.subText.setColor(full.length ? TEXT_COLORS.warm : TEXT_COLORS.secondary);
     this.progress.setVisible(false);
     this.setBayVisible(true);
 
     const resources = state.resources;
-    const build = droneBuildCost(farm.droneCount);
-    const upgrade = droneModelCost(farm.droneModel);
-    this.bayDot.setVisible((build !== null && canAfford(resources, build)) || (upgrade !== null && canAfford(resources, upgrade)));
+    const build = droneBuildCost(farm.droneCount, this.ctx.model.maxDrones());
+    this.bayDot.setVisible(build !== null && canAfford(resources, build));
   }
 
   private setProgress(ratio: number): void {
@@ -368,7 +405,10 @@ export class FarmScene extends Phaser.Scene {
     this.panel?.destroy();
     this.panelSignature = panelSignature(this.ctx.model);
     const { width, height } = this.cameras.main;
-    this.panel = openDroneBayPanel(this, this.ctx.model, { x: 0, y: 0, width, height }, () => this.closePanel(), animate);
+    this.panel = openDroneBayPanel(this, this.ctx.model, { x: 0, y: 0, width, height }, () => this.closePanel(), animate, () => {
+      this.closePanel();
+      this.ctx.showTab('upgrades');
+    });
     this.panel.setDepth(10000);
   }
 

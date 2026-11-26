@@ -10,10 +10,12 @@ import {
   type MaterialAmounts,
 } from '../data/economy';
 import { MATERIAL_IDS } from '../data/materials';
-import { DRONE_MODELS, DRONES } from '../data/farm';
+import { DRONE_BRANCHES_BY_ID, DRONE_MODELS, DRONES, type DroneBranchId } from '../data/farm';
+import type { GarageUpgradeId } from '../data/garage';
 import { partId, QUALITIES, TIER_ORDER } from '../data/vehicles';
-import type { FarmState } from './farm';
-import type { Resources } from './state';
+import { branchLevel, branchMaxLevel, type FarmState } from './farm';
+import { garageUpgradeCost } from './garage';
+import type { Resources, WorkshopState } from './state';
 import { getPart, type CarState, type PartDef, type SlotId } from './vehicle';
 
 /*
@@ -103,8 +105,8 @@ export function buyLevelUp(car: CarState, slot: SlotId, resources: Resources): b
 }
 
 /** Price of building one more drone, given how many the farm already has; null at the limit. */
-export function droneBuildCost(currentCount: number): Cost | null {
-  if (currentCount >= DRONES.maxCount) return null;
+export function droneBuildCost(currentCount: number, maxCount: number = DRONES.maxCount): Cost | null {
+  if (currentCount >= maxCount) return null;
   // The first drone comes from a milestone; prices start with the second.
   const n = Math.max(1, currentCount);
   const c = DRONES.buildCost;
@@ -121,8 +123,8 @@ export function droneModelCost(currentModel: number): Cost | null {
 }
 
 /** Builds one more drone. Returns false if at the limit or unaffordable. */
-export function buyDrone(farm: FarmState, resources: Resources): boolean {
-  const cost = droneBuildCost(farm.droneCount);
+export function buyDrone(farm: FarmState, resources: Resources, maxCount: number = DRONES.maxCount): boolean {
+  const cost = droneBuildCost(farm.droneCount, maxCount);
   if (!cost || farm.droneCount < 1 || !spend(resources, cost)) return false;
   farm.droneCount += 1;
   return true;
@@ -133,5 +135,38 @@ export function buyDroneModel(farm: FarmState, resources: Resources): boolean {
   const cost = droneModelCost(farm.droneModel);
   if (!cost || farm.droneCount < 1 || !spend(resources, cost)) return false;
   farm.droneModel += 1;
+  return true;
+}
+
+/** Price of the next level of a drone-tree branch, or null if the current model can't go higher. */
+export function droneBranchCost(farm: FarmState, id: DroneBranchId): Cost | null {
+  const level = branchLevel(farm, id);
+  if (level >= branchMaxLevel(farm, id)) return null;
+  return branchLevelCost(id, level + 1);
+}
+
+/** Price of a branch level (ignoring whether the current model allows it). */
+export function branchLevelCost(id: DroneBranchId, level: number): Cost | null {
+  const branch = DRONE_BRANCHES_BY_ID[id];
+  if (Array.isArray(branch.cost)) return (branch.cost as readonly Cost[])[level - 1] ?? null;
+  const c = branch.cost as Exclude<typeof branch.cost, readonly Cost[]>;
+  const materials: MaterialAmounts = {};
+  for (const [mid, m] of Object.entries(c.materials)) if (m) materials[mid as keyof MaterialAmounts] = curve(m, level);
+  return { money: curve(c.money, level), materials };
+}
+
+/** Buys the next level of a drone-tree branch. Returns false if not possible. */
+export function buyDroneBranch(farm: FarmState, id: DroneBranchId, resources: Resources): boolean {
+  const cost = droneBranchCost(farm, id);
+  if (!cost || farm.droneCount < 1 || !spend(resources, cost)) return false;
+  farm.branches[id] = branchLevel(farm, id) + 1;
+  return true;
+}
+
+/** Buys the next level of a garage upgrade. Returns false if maxed or unaffordable. */
+export function buyGarageUpgrade(workshop: WorkshopState, id: GarageUpgradeId, resources: Resources): boolean {
+  const cost = garageUpgradeCost(workshop, id);
+  if (!cost || !spend(resources, cost)) return false;
+  workshop[id] += 1;
   return true;
 }

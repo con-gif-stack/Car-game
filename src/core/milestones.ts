@@ -1,5 +1,5 @@
+import { storeMaterials } from './garage';
 import { BIOME_IDS, type BiomeId } from '../data/biomes';
-import { MATERIAL_IDS } from '../data/materials';
 import { MILESTONES, MILESTONES_BY_ID, type MilestoneCondition, type MilestoneDef } from '../data/milestones';
 import { QUALITIES, SLOTS } from '../data/vehicles';
 import type { GameState } from './state';
@@ -48,7 +48,7 @@ export function checkMilestones(state: GameState): MilestoneDef[] {
     state.milestones.push(milestone.id);
     const { reward } = milestone;
     if (reward.money) state.resources.money += reward.money;
-    for (const id of MATERIAL_IDS) state.resources.materials[id] += reward.materials?.[id] ?? 0;
+    if (reward.materials) storeMaterials(state.resources, state.workshop, reward.materials);
     if (reward.unlockBiome && !state.unlockedBiomes.includes(reward.unlockBiome)) {
       state.unlockedBiomes.push(reward.unlockBiome);
     }

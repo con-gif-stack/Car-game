@@ -8,6 +8,7 @@ import { FarmScene } from './scenes/FarmScene';
 import { GarageScene } from './scenes/GarageScene';
 import { PlaceholderTabScene } from './scenes/PlaceholderTabScene';
 import { UIScene } from './scenes/UIScene';
+import { UpgradesScene } from './scenes/UpgradesScene';
 import { WorldScene } from './scenes/WorldScene';
 import { computeGameHeight, computeLayout, GAME_WIDTH } from './ui/layout';
 import { TABS, type TabId } from './ui/tabs';
@@ -29,6 +30,7 @@ const TAB_SCENES: Partial<Record<TabId, (ctx: AppContext) => Phaser.Scene>> = {
   farm: (ctx) => new FarmScene(ctx),
   garage: (ctx) => new GarageScene(ctx),
   drive: (ctx) => new DriveScene(ctx),
+  upgrades: (ctx) => new UpgradesScene(ctx),
   world: (ctx) => new WorldScene(ctx),
 };
 
@@ -39,7 +41,7 @@ const model = new GameModel(loaded.state, saves, now, loaded.awaySeconds);
 
 const width = GAME_WIDTH;
 const height = computeGameHeight(window.innerWidth, window.innerHeight);
-const ctx: AppContext = { model, layout: computeLayout(width, height) };
+const ctx: AppContext = { model, layout: computeLayout(width, height), showTab: () => undefined };
 
 /**
  * Phaser draws text once into a texture, so the pixel font must be ready first. Give up after a

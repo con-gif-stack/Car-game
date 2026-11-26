@@ -200,7 +200,7 @@ describe('save migration v4 → v5', () => {
     expect(state?.farm.droneCount).toBe(0);
     expect(state?.farm.deposits[DEPOSITS[0]?.id ?? '']).toBe(DEPOSITS[0]?.max);
 
-    const broken = repairFarm({ deposits: { 'heap-1': -5 }, droneCount: 99, droneModel: -1, scavenged: 3.7 });
+    const broken = repairFarm({ deposits: { 'heap-1': -5 }, droneCount: 99, droneModel: -1, scavenged: 3.7, branches: { speed: 0, cargo: 0, drills: 0, range: 0 } });
     expect(broken.deposits['heap-1']).toBe(0);
     expect(broken.droneCount).toBe(DRONES.maxCount);
     expect(broken.droneModel).toBe(0);

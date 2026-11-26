@@ -10,7 +10,9 @@ import { PixelGrid } from './PixelGrid';
 export const UI_ICON_SIZE = 16;
 
 export type HudIcon = 'fuel' | 'wrench' | 'flag' | 'star' | 'trophy' | 'clock' | 'speed';
-export type UiIcon = TabId | HudIcon;
+/** Drone-tree branches and garage upgrades. */
+export type UpgradeIcon = 'cargo' | 'drill' | 'range' | 'bay' | 'warehouse' | 'refinery' | 'magnet' | 'lock';
+export type UiIcon = TabId | HudIcon | UpgradeIcon;
 
 const OUTLINE = 0x07050f;
 
@@ -23,6 +25,18 @@ export const HUD_ICON_COLORS: Record<HudIcon, number> = {
   trophy: 0xffc43d,
   clock: 0x9fd8ff,
   speed: 0x3de8ff,
+};
+
+/** Default colours for the upgrade icons. */
+export const UPGRADE_ICON_COLORS: Record<UpgradeIcon, number> = {
+  cargo: 0xd9a45a,
+  drill: 0xb9bcc6,
+  range: 0x6fe08a,
+  bay: 0x3de8ff,
+  warehouse: 0xc98a5a,
+  refinery: 0xff9a3c,
+  magnet: 0xff5d6c,
+  lock: 0x8a84b4,
 };
 
 /** Builds an icon in shades of `color`. */
@@ -175,6 +189,102 @@ export function buildUiIcon(icon: UiIcon, color: number): PixelGrid {
       g.fillCircle(8, 8, 5.5, 0x1b1638);
       rect(8, 4, 8, 8, light);
       rect(8, 8, 11, 8, light);
+      break;
+    }
+    case 'cargo': {
+      // A strapped crate.
+      rect(2, 4, 13, 14, base);
+      rect(2, 4, 13, 5, light);
+      rect(12, 6, 13, 14, dark);
+      for (let x = 2; x <= 13; x++) g.set(x, 9, dark);
+      rect(7, 4, 8, 14, shade(color, -0.55));
+      rect(4, 7, 5, 7, light);
+      break;
+    }
+    case 'drill': {
+      // A drill bit pointing down, with a spiral.
+      rect(5, 1, 10, 4, dark);
+      rect(5, 1, 7, 3, light);
+      for (let y = 5; y <= 14; y++) {
+        const half = Math.max(0, Math.round((14 - y) * 0.35));
+        for (let x = 8 - half; x <= 7 + half + 1; x++) g.set(x, y, (x + y) % 3 === 0 ? dark : x < 8 ? light : base);
+      }
+      g.set(7, 15, base);
+      g.set(8, 15, dark);
+      break;
+    }
+    case 'range': {
+      // A signal mast with waves.
+      rect(7, 6, 8, 15, base);
+      rect(5, 14, 10, 15, dark);
+      g.fillCircle(8, 5.5, 1.6, light);
+      for (const [r, c] of [[4, base], [6.5, dark]] as const) {
+        for (let a = -0.9; a <= 0.9; a += 0.08) {
+          g.set(Math.round(8 + Math.sin(a) * r), Math.round(5.5 - Math.cos(a) * r * 0.6), c);
+        }
+      }
+      break;
+    }
+    case 'bay': {
+      // A charging pad with a drone on it and a bolt.
+      rect(1, 11, 14, 14, dark);
+      rect(1, 11, 14, 11, base);
+      rect(4, 6, 11, 9, base);
+      rect(4, 6, 11, 6, light);
+      rect(2, 4, 5, 4, light);
+      rect(10, 4, 13, 4, light);
+      g.set(7, 12, 0xffd23f);
+      g.set(8, 12, 0xffd23f);
+      g.set(8, 13, 0xffd23f);
+      break;
+    }
+    case 'warehouse': {
+      // Shelving with boxes.
+      rect(1, 2, 2, 15, dark);
+      rect(13, 2, 14, 15, dark);
+      for (const y of [6, 11, 15]) rect(1, y, 14, y, base);
+      rect(3, 3, 6, 5, light);
+      rect(8, 4, 11, 5, base);
+      rect(4, 8, 8, 10, base);
+      rect(9, 9, 12, 10, light);
+      rect(3, 12, 6, 14, light);
+      break;
+    }
+    case 'refinery': {
+      // A furnace with a chimney and a glowing mouth.
+      rect(10, 1, 12, 7, dark);
+      rect(10, 1, 10, 7, base);
+      rect(2, 6, 13, 15, base);
+      rect(2, 6, 13, 7, light);
+      rect(12, 8, 13, 15, dark);
+      rect(5, 10, 9, 13, 0xffd23f);
+      rect(6, 11, 8, 12, 0xff5a3c);
+      break;
+    }
+    case 'magnet': {
+      // A horseshoe magnet.
+      for (let y = 2; y <= 13; y++) {
+        for (let x = 2; x <= 13; x++) {
+          const d = Math.hypot(x + 0.5 - 8, y + 0.5 - 8);
+          if (y >= 8 && d >= 2.5 && d <= 6) g.set(x, y, base);
+        }
+      }
+      rect(2, 2, 5, 8, base);
+      rect(10, 2, 13, 8, base);
+      rect(2, 2, 5, 3, 0xf1eefb);
+      rect(10, 2, 13, 3, 0xf1eefb);
+      g.paint(light, (x, y, c) => c === base && x < 4 && y > 3);
+      g.paint(dark, (x, y, c) => c === base && x > 11 && y > 3);
+      break;
+    }
+    case 'lock': {
+      rect(3, 7, 12, 14, base);
+      rect(3, 7, 12, 8, light);
+      rect(11, 9, 12, 14, dark);
+      for (let a = 0; a <= Math.PI; a += 0.1) {
+        g.set(Math.round(7.5 + Math.cos(a) * 3.5), Math.round(7 - Math.sin(a) * 4), dark);
+      }
+      rect(7, 10, 8, 12, shade(color, -0.6));
       break;
     }
     case 'speed': {

@@ -125,7 +125,12 @@ export class Panel {
     iconScale?: number;
     /** Draws the row on a card. */
     card?: boolean;
+    /** Edge colour of the card. */
+    cardColor?: number;
+    /** Makes the row's card tappable (implies `card`). */
+    onClick?: () => void;
   }): Phaser.GameObjects.Text | null {
+    if (opts.onClick) opts.card = true;
     this.group++;
     const size = opts.size ?? 30;
     const iconScale = opts.iconScale ?? ICON_SCALE;
@@ -146,8 +151,18 @@ export class Panel {
     const top = (height - textHeight) / 2;
 
     if (opts.card) {
-      const card = addFrame(this.scene, this.left, 0, this.innerWidth, height, { kind: 'card', color: COLORS.panelBorder });
+      const card = addFrame(this.scene, this.left, 0, this.innerWidth, height, { kind: 'card', color: opts.cardColor ?? COLORS.panelBorder });
       this.placeAt(card, 0);
+      const onClick = opts.onClick;
+      if (onClick) {
+        card.setInteractive({ useHandCursor: true });
+        card.on('pointerdown', () => card.setAlpha(0.75));
+        card.on('pointerout', () => card.setAlpha(1));
+        card.on('pointerup', () => {
+          card.setAlpha(1);
+          onClick();
+        });
+      }
     }
     if (opts.icon) {
       const icon = this.scene.add.image(this.left + inset, 0, opts.icon).setOrigin(0).setScale(iconScale);

@@ -1,9 +1,19 @@
 import type Phaser from 'phaser';
-import { formatNumber, formatPrecise } from '../core/format';
+import { formatDuration, formatNumber, formatPrecise } from '../core/format';
 import type { GameModel } from '../core/GameModel';
 import { salvageMagnetMultiplier } from '../core/idle';
 import type { Resources } from '../core/state';
 import { DEPOSITS, farmRates } from '../core/farm';
+import {
+  batchSeconds,
+  capacityAt,
+  garageLevel,
+  garageUpgradeCost,
+  refineryRecipe,
+  refineryRecipes,
+  refineryStatus,
+  storageCap,
+} from '../core/garage';
 import {
   canAfford,
   costMaterials,
@@ -17,11 +27,14 @@ import {
 import { getInstalledPart, partStatsAtLevel, type SlotDef, type StatBlock } from '../core/vehicle';
 import { ECONOMY, PART_LEVELS, type Cost } from '../data/economy';
 import { DRONE_MODELS, DRONES } from '../data/farm';
-import { MATERIAL_IDS, MATERIALS, MATERIALS_BY_ID, RARITIES } from '../data/materials';
+import { DRONE_BAYS, FUEL_DEPOT_LEVELS, GARAGE_UPGRADES, GARAGE_UPGRADES_BY_ID, REFINERY, type GarageUpgradeId } from '../data/garage';
+import { MATERIAL_IDS, MATERIALS, MATERIALS_BY_ID, RARITIES, type MaterialId } from '../data/materials';
+import type { UiIcon } from '../art/uiIcons';
 import { QUALITIES, STATS } from '../data/vehicles';
 import { COLORS, TEXT_COLORS } from '../ui/theme';
 import { cssColor, Panel, type Area } from './panel';
 import { materialIconKey, moneyIconKey } from './textures';
+import { uiIconKey } from './ui';
 
 /*
  * Contents of the game's pop-up panels: part details and upgrades, the Workshop, and the
@@ -73,7 +86,10 @@ export function panelSignature(model: GameModel): string {
   const { resources, workshop } = model.state;
   const owned = MATERIALS.map((m) => formatNumber(resources.materials[m.id])).join(',');
   const { farm } = model.state;
-  return `${formatNumber(resources.money)}|${owned}|${JSON.stringify(model.activeCar.parts)}|${workshop.salvageMagnetLevel}|${farm.droneCount}|${farm.droneModel}`;
+  // The refinery's countdown changes every second; round it so panels don't redraw constantly.
+  const { refineryProgress, ...levels } = workshop;
+  const refinery = Math.floor(refineryProgress * 20);
+  return `${formatNumber(resources.money)}|${owned}|${JSON.stringify(model.activeCar.parts)}|${JSON.stringify(levels)}|${refinery}|${farm.droneCount}|${farm.droneModel}|${JSON.stringify(farm.branches)}`;
 }
 
 /** Details of the part in a slot, with buttons to level it up or install the next tier. */
@@ -146,24 +162,203 @@ export function openPartPanel(
   return panel.finish();
 }
 
-/** Workshop: garage-wide upgrades (for now, the Salvage Magnet). */
+/** Pages of the Workshop: its menu, one per garage upgrade, and the Salvage Magnet. */
+export type WorkshopPage = 'menu' | GarageUpgradeId | 'magnet';
+
+const WORKSHOP_ICONS: Record<GarageUpgradeId | 'magnet', UiIcon> = {
+  droneBays: 'bay',
+  warehouse: 'warehouse',
+  fuelDepot: 'fuel',
+  refinery: 'refinery',
+  magnet: 'magnet',
+};
+
+/** What a garage upgrade does at a level, in one line. */
+function garageEffect(id: GarageUpgradeId, level: number): string {
+  switch (id) {
+    case 'droneBays':
+      return `Runs up to ${DRONES.maxCount + DRONE_BAYS.dronesPerLevel * level} drones`;
+    case 'warehouse':
+      return `Holds ${formatNumber(capacityAt(level, 'scrapMetal'))} of each Common and ${formatNumber(capacityAt(level, 'copperWire'))} of each Uncommon material`;
+    case 'fuelDepot': {
+      const depot = FUEL_DEPOT_LEVELS[level] ?? FUEL_DEPOT_LEVELS[0];
+      return `${depot?.maxTanks ?? 3} fuel tanks, one refill every ${depot?.refillMinutes ?? 40} min`;
+    }
+    case 'refinery': {
+      if (level === 0) return 'Not built yet';
+      const recipes = refineryRecipes(level).length;
+      return `Works at ×${fmtStat(1 + REFINERY.speedPerLevel * (level - 1))} speed · ${recipes} recipe${recipes === 1 ? '' : 's'}`;
+    }
+  }
+}
+
+/** A material list as text: "40 Scrap Metal + 10 Rubber". */
+function amounts(list: Partial<Record<MaterialId, number>>): string {
+  return Object.entries(list)
+    .map(([id, n]) => `${formatNumber(n ?? 0)} ${MATERIALS_BY_ID[id as MaterialId].name}`)
+    .join(' + ');
+}
+
+/**
+ * Workshop: the garage's own upgrades (Drone Bays, Warehouse, Fuel Depot, Refinery) and the
+ * Salvage Magnet. The menu lists them; tapping one opens its page via `navigate`.
+ */
 export function openWorkshopPanel(
   scene: Phaser.Scene,
   model: GameModel,
   area: Area,
   onClose: () => void,
   animate = true,
+  page: WorkshopPage = 'menu',
+  navigate: (page: WorkshopPage) => void = () => undefined,
+): Phaser.GameObjects.Container {
+  if (page === 'magnet') return magnetPage(scene, model, area, onClose, animate, navigate);
+  if (page !== 'menu') return garageUpgradePage(scene, model, area, onClose, animate, page, navigate);
+
+  const { resources, workshop } = model.state;
+  const panel = new Panel(scene, { area, onBackdrop: onClose, animate });
+  panel.header('WORKSHOP');
+  panel.text('Upgrade the garage itself. Tap one to see more.', 26, TEXT_COLORS.secondary, { gapAfter: 18 });
+  for (const def of GARAGE_UPGRADES) {
+    const level = garageLevel(workshop, def.id);
+    const cost = garageUpgradeCost(workshop, def.id);
+    const ready = cost !== null && canAfford(resources, cost);
+    panel.row({
+      icon: uiIconKey(scene, WORKSHOP_ICONS[def.id]),
+      iconScale: 3,
+      title: def.name,
+      sub: garageEffect(def.id, level),
+      value: level >= def.maxLevel ? 'MAX' : `Lv ${level}/${def.maxLevel}`,
+      valueColor: ready ? GREEN : TEXT_COLORS.secondary,
+      cardColor: ready ? COLORS.good : undefined,
+      size: 28,
+      gapAfter: 10,
+      onClick: () => navigate(def.id),
+    });
+  }
+  const magnetLevel = workshop.salvageMagnetLevel;
+  const magnetCost = salvageMagnetCost(magnetLevel);
+  const magnetReady = magnetCost !== null && canAfford(resources, magnetCost);
+  panel.row({
+    icon: uiIconKey(scene, 'magnet'),
+    iconScale: 3,
+    title: 'Salvage Magnet',
+    sub: `Rare and Epic trickle ×${fmtStat(salvageMagnetMultiplier(magnetLevel))}`,
+    value: magnetCost ? `Lv ${magnetLevel}/${ECONOMY.salvageMagnet.maxLevel}` : 'MAX',
+    valueColor: magnetReady ? GREEN : TEXT_COLORS.secondary,
+    cardColor: magnetReady ? COLORS.good : undefined,
+    size: 28,
+    gapAfter: 10,
+    onClick: () => navigate('magnet'),
+  });
+  panel.gap(8);
+  panel.button('Close', { onClick: onClose, tone: 'neutral', height: 80 });
+  return panel.finish();
+}
+
+/** One garage upgrade: what it does now and next, its price, and (for the Refinery) the recipes. */
+function garageUpgradePage(
+  scene: Phaser.Scene,
+  model: GameModel,
+  area: Area,
+  onClose: () => void,
+  animate: boolean,
+  id: GarageUpgradeId,
+  navigate: (page: WorkshopPage) => void,
+): Phaser.GameObjects.Container {
+  const { resources, workshop } = model.state;
+  const def = GARAGE_UPGRADES_BY_ID[id];
+  const level = garageLevel(workshop, id);
+  const panel = new Panel(scene, { area, onBackdrop: onClose, animate });
+  panel.header(def.name.toUpperCase());
+  panel.row({ icon: uiIconKey(scene, WORKSHOP_ICONS[id]), iconScale: 4, title: `Level ${level}/${def.maxLevel}`, sub: def.description, size: 34, gapAfter: 14 });
+  panel.text(garageEffect(id, level), 28, TEXT_COLORS.primary, { gapAfter: 16 });
+
+  if (id === 'refinery' && level > 0) refinerySection(panel, scene, model, navigate);
+
+  panel.divider();
+  const cost = garageUpgradeCost(workshop, id);
+  if (cost) {
+    panel.text(`${level === 0 ? 'BUILD' : 'UPGRADE'} > LEVEL ${level + 1}`, 24, TEXT_COLORS.muted, { bold: true, gapAfter: 6 });
+    panel.text(garageEffect(id, level + 1), 28, GREEN, { gapAfter: 12 });
+    if (id === 'refinery') {
+      const unlocks = REFINERY.recipes.filter((r) => r.level === level + 1);
+      if (unlocks.length) panel.text(`Unlocks: ${unlocks.map((r) => r.name).join(', ')}`, 26, GREEN, { gapAfter: 12 });
+    }
+    costRows(panel, scene, resources, cost);
+    panel.gap(6);
+    panel.button(level === 0 ? `Build ${def.name}` : `Upgrade ${def.name}`, {
+      enabled: canAfford(resources, cost),
+      onClick: () => model.buyGarageUpgrade(id),
+    });
+  } else {
+    panel.text('Fully upgraded.', 28, GREEN, { gapAfter: 16 });
+  }
+  panel.gap(4);
+  panel.button('Back', { onClick: () => navigate('menu'), tone: 'neutral', height: 80 });
+  return panel.finish();
+}
+
+/** The refinery's status and recipe list (tap a recipe to run it). */
+function refinerySection(panel: Panel, scene: Phaser.Scene, model: GameModel, navigate: (page: WorkshopPage) => void): void {
+  const { resources, workshop } = model.state;
+  const level = garageLevel(workshop, 'refinery');
+  const current = refineryRecipe(workshop.refineryRecipe);
+  const status = refineryStatus(resources, workshop);
+  const statusText =
+    status === 'running' && current
+      ? `Working: next batch in ${formatDuration((1 - workshop.refineryProgress) * batchSeconds(current, level))}`
+      : status === 'noInputs'
+        ? 'Waiting: not enough materials for the recipe'
+        : status === 'storageFull'
+          ? 'Waiting: no room in storage for what it makes'
+          : 'Idle: pick a recipe below';
+  panel.text(statusText, 26, status === 'running' ? GREEN : TEXT_COLORS.warm, { gapAfter: 12 });
+  for (const recipe of REFINERY.recipes) {
+    const unlocked = recipe.level <= level;
+    const on = current?.id === recipe.id;
+    panel.row({
+      icon: materialIconKey(scene, Object.keys(recipe.outputs)[0] as MaterialId),
+      iconScale: 3,
+      title: recipe.name,
+      titleColor: unlocked ? TEXT_COLORS.primary : TEXT_COLORS.muted,
+      sub: unlocked
+        ? `${amounts(recipe.inputs)} > ${amounts(recipe.outputs)} · ${formatDuration(batchSeconds(recipe, level))}`
+        : `Needs Refinery level ${recipe.level}`,
+      value: on ? 'ON' : unlocked ? 'Use' : '',
+      valueColor: on ? GREEN : TEXT_COLORS.secondary,
+      cardColor: on ? COLORS.good : undefined,
+      size: 26,
+      gapAfter: 8,
+      onClick: unlocked
+        ? () => {
+            model.setRefineryRecipe(on ? '' : recipe.id);
+            navigate('refinery');
+          }
+        : undefined,
+    });
+  }
+  panel.gap(8);
+}
+
+/** The Salvage Magnet's page. */
+function magnetPage(
+  scene: Phaser.Scene,
+  model: GameModel,
+  area: Area,
+  onClose: () => void,
+  animate: boolean,
+  navigate: (page: WorkshopPage) => void,
 ): Phaser.GameObjects.Container {
   const resources = model.state.resources;
   const level = model.state.workshop.salvageMagnetLevel;
   const { maxLevel } = ECONOMY.salvageMagnet;
   const panel = new Panel(scene, { area, onBackdrop: onClose, animate });
 
-  panel.header('WORKSHOP');
-  panel.text('Salvage Magnet', 48, TEXT_COLORS.primary, { bold: true, gapAfter: 6 });
-  panel.text(`Level ${level}/${maxLevel}`, 28, cssColor(COLORS.accentAlt), { bold: true, gapAfter: 10 });
+  panel.header('SALVAGE MAGNET');
+  panel.row({ icon: uiIconKey(scene, 'magnet'), iconScale: 4, title: `Level ${level}/${maxLevel}`, size: 34, gapAfter: 10 });
   panel.text(
-    'Pulls the odd rare part out of roadside scrap. Boosts how often Rare and Epic materials turn up while idle-driving. Driving runs stay their main source.',
+    'Pulls the odd rare part out of the scrap. Boosts how often Rare and Epic materials turn up while you are idle. Drive runs stay their main source.',
     28,
     TEXT_COLORS.secondary,
     { gapAfter: 20 },
@@ -188,11 +383,11 @@ export function openWorkshopPanel(
     panel.text(`Fully upgraded: rare finds ×${fmtStat(now)}.`, 30, GREEN, { gapAfter: 16 });
   }
   panel.gap(4);
-  panel.button('Close', { onClick: onClose, tone: 'neutral', height: 80 });
+  panel.button('Back', { onClick: () => navigate('menu'), tone: 'neutral', height: 80 });
   return panel.finish();
 }
 
-/** Every material: amount held, rarity, and where it comes from. */
+/** Every material: amount held (and the storage limit), rarity, and where it comes from. */
 export function openInventoryPanel(
   scene: Phaser.Scene,
   model: GameModel,
@@ -200,30 +395,43 @@ export function openInventoryPanel(
   onClose: () => void,
   animate = true,
 ): Phaser.GameObjects.Container {
-  const { materials } = model.state.resources;
+  const { resources, workshop } = model.state;
+  const { materials } = resources;
   const rates = model.incomeRates().materialsPerSecond;
   const farmed = new Set(DEPOSITS.map((d) => d.material));
   const panel = new Panel(scene, { area, onBackdrop: onClose, animate });
 
   panel.header('MATERIALS');
-  panel.text('Everything your drones, runs and scavenging have brought in.', 28, TEXT_COLORS.secondary, { gapAfter: 20 });
+  panel.text(
+    `Everything your drones, runs and scavenging have brought in. Warehouse level ${garageLevel(workshop, 'warehouse')}: when a material is full, drones leave it alone.`,
+    26,
+    TEXT_COLORS.secondary,
+    { gapAfter: 20 },
+  );
   for (const material of MATERIALS) {
     const rarity = RARITIES[material.rarity];
     const perHour = rates[material.id] * 3600;
-    const source = farmed.has(material.id)
-      ? perHour > 0
-        ? `${rarity.label} · +${formatPrecise(perHour)}/h from drones`
-        : `${rarity.label} · scavenge it on the farm`
-      : perHour > 0
-        ? `${rarity.label} · mostly from drive runs (+${formatPrecise(perHour)}/h trickle)`
-        : `${rarity.label} · from drive runs`;
+    const cap = storageCap(workshop, material.id);
+    const full = model.isFull(material.id);
+    const source = full
+      ? `${rarity.label} · storage full`
+      : farmed.has(material.id)
+        ? perHour > 0
+          ? `${rarity.label} · +${formatPrecise(perHour)}/h from drones`
+          : `${rarity.label} · scavenge it on the farm`
+        : perHour > 0
+          ? `${rarity.label} · mostly from drive runs (+${formatPrecise(perHour)}/h)`
+          : `${rarity.label} · from drive runs`;
     panel.row({
       icon: materialIconKey(scene, material.id),
       title: material.name,
       titleColor: cssColor(rarity.color),
       sub: source,
-      value: formatPrecise(materials[material.id]),
-      gapAfter: 16,
+      subColor: full ? TEXT_COLORS.warm : undefined,
+      value: Number.isFinite(cap) ? `${formatNumber(materials[material.id])} / ${formatNumber(cap)}` : formatPrecise(materials[material.id]),
+      valueColor: full ? TEXT_COLORS.warm : undefined,
+      size: 28,
+      gapAfter: 14,
     });
   }
   panel.gap(4);
@@ -231,19 +439,21 @@ export function openInventoryPanel(
   return panel.finish();
 }
 
-/** Drone Bay: build more drones and upgrade them to better models. */
+/** Drone Bay: build more drones, with a way into the drone upgrade tree. */
 export function openDroneBayPanel(
   scene: Phaser.Scene,
   model: GameModel,
   area: Area,
   onClose: () => void,
   animate = true,
+  openTree: () => void = () => undefined,
 ): Phaser.GameObjects.Container {
   const resources = model.state.resources;
   const farm = model.state.farm;
   const current = DRONE_MODELS[farm.droneModel] ?? DRONE_MODELS[0];
-  const rates = farmRates(farm);
+  const rates = farmRates(farm, model.isFull);
   const perHour = MATERIAL_IDS.reduce((sum, id) => sum + rates.materials[id], 0) * 3600;
+  const limit = model.maxDrones();
   const panel = new Panel(scene, { area, onBackdrop: onClose, animate });
 
   panel.header('DRONE BAY');
@@ -257,9 +467,9 @@ export function openDroneBayPanel(
   );
 
   panel.divider();
-  const buildCost = droneBuildCost(farm.droneCount);
+  const buildCost = droneBuildCost(farm.droneCount, limit);
   if (buildCost) {
-    panel.text(`BUILD DRONE #${farm.droneCount + 1}`, 24, TEXT_COLORS.muted, { bold: true, gapAfter: 10 });
+    panel.text(`BUILD DRONE #${farm.droneCount + 1} (OF ${limit})`, 24, TEXT_COLORS.muted, { bold: true, gapAfter: 10 });
     costRows(panel, scene, resources, buildCost);
     panel.gap(6);
     panel.button('Build drone', {
@@ -268,28 +478,49 @@ export function openDroneBayPanel(
       tone: 'secondary',
     });
   } else {
-    panel.text(`The garage can run ${DRONES.maxCount} drones. Garage upgrades will add room.`, 28, TEXT_COLORS.muted, { gapAfter: 16 });
+    panel.text(`All ${limit} bays are in use. Build more Drone Bays in the Garage's Workshop.`, 28, TEXT_COLORS.muted, { gapAfter: 16 });
   }
+  panel.gap(4);
+  panel.button('Drone upgrades >', { onClick: openTree, tone: 'primary', icon: uiIconKey(scene, 'upgrades', 0x3a2410) });
+  panel.button('Close', { onClick: onClose, tone: 'neutral', height: 80 });
+  return panel.finish();
+}
 
-  panel.divider();
+/** The next drone model: what it does better and its price. */
+export function openDroneModelPanel(
+  scene: Phaser.Scene,
+  model: GameModel,
+  area: Area,
+  onClose: () => void,
+  animate = true,
+): Phaser.GameObjects.Container {
+  const resources = model.state.resources;
+  const farm = model.state.farm;
+  const current = DRONE_MODELS[farm.droneModel] ?? DRONE_MODELS[0];
+  const panel = new Panel(scene, { area, onBackdrop: onClose, animate });
+  panel.header('DRONE MODEL');
+  panel.text(`Now: ${current?.name ?? ''}`, 30, TEXT_COLORS.secondary, { gapAfter: 12 });
   const next = DRONE_MODELS[farm.droneModel + 1];
   const modelCost = droneModelCost(farm.droneModel);
   if (next && modelCost) {
-    panel.text(`UPGRADE > ${next.name.toUpperCase()}`, 24, TEXT_COLORS.muted, { bold: true, gapAfter: 6 });
-    panel.text(next.description, 28, TEXT_COLORS.secondary, { gapAfter: 6 });
+    panel.text(next.name, 46, TEXT_COLORS.primary, { bold: true, gapAfter: 6 });
+    panel.text(next.description, 28, TEXT_COLORS.secondary, { gapAfter: 8 });
     panel.text(
-      `Speed ×${fmtStat(next.speed / (current?.speed ?? 1))} · carries ${next.capacity} · digs ×${fmtStat(next.heapYield)}`,
+      `Base speed ×${fmtStat(next.speed / (current?.speed ?? 1))} · carries ${next.capacity} · digs ×${fmtStat(next.heapYield)}`,
       28,
       GREEN,
-      { gapAfter: 12 },
+      { gapAfter: 6 },
     );
+    panel.text('Opens more levels on every branch of the tree.', 26, GREEN, { gapAfter: 12 });
     costRows(panel, scene, resources, modelCost);
     panel.gap(6);
-    panel.button(`Upgrade all drones`, { enabled: canAfford(resources, modelCost), onClick: () => model.buyDroneModel() });
+    panel.button('Upgrade all drones', {
+      enabled: farm.droneCount > 0 && canAfford(resources, modelCost),
+      onClick: () => model.buyDroneModel(),
+    });
   } else {
     panel.text('Your drones are the best there are, for now.', 28, TEXT_COLORS.muted, { gapAfter: 16 });
   }
-
   panel.gap(4);
   panel.button('Close', { onClick: onClose, tone: 'neutral', height: 80 });
   return panel.finish();
