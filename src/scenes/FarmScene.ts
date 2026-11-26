@@ -1,5 +1,17 @@
 import Phaser from 'phaser';
-import { buildDeposit, buildDrone, buildFarmGround, buildGarage, buildWreck, depositStage, drawTracks } from '../art/farmArt';
+import {
+  buildContactShadow,
+  buildDeposit,
+  buildDrone,
+  buildFarmGround,
+  buildGarage,
+  buildVignette,
+  buildWreck,
+  depositStage,
+  drawGarageRoad,
+  drawTracks,
+  drawYardEdge,
+} from '../art/farmArt';
 import type { Haul } from '../core/farm';
 import { crewsOf, farmDeposits, farmRates, inReach } from '../core/farm';
 import { formatNumber, formatPrecise } from '../core/format';
@@ -13,7 +25,8 @@ import type { AppContext } from './context';
 import { cssColor } from './panel';
 import { openDroneBayPanel, openFarmPanel, panelSignature } from './panels';
 import { overlayStyle, textStyle } from './textStyles';
-import { ensureGridTexture } from './textures';
+import { FARM_DEPTH, FarmFx } from './farmFx';
+import { ensureGridTexture, materialIconKey } from './textures';
 import { addButton, addDot, addFrame, PixelBar, uiIconKey, type PixelButton } from './ui';
 
 const PAD = 32;
@@ -21,6 +34,8 @@ const PAD = 32;
 const PANEL_HEIGHT = 250;
 /** Space left at the bottom (the dev status line sits here). */
 const BOTTOM_PAD = 48;
+/** Space above the top of the map, so the furthest piles' lock icons stay on screen. */
+const MAP_TOP_MARGIN = 40;
 /** Screen units per art pixel for the ground, buildings and deposits. */
 const GROUND_SCALE = 6;
 const BUILDING_SCALE = 4;
@@ -36,6 +51,10 @@ interface DroneSprite {
   shadow: Phaser.GameObjects.Ellipse;
   body: Phaser.GameObjects.Image;
   crate: Phaser.GameObjects.Rectangle;
+  /** Last phase and position seen, for take-off puffs and tilting into the flight. */
+  phase: string;
+  lastX: number;
+  sparkTimer: number;
 }
 
 type OpenPanel = 'droneBay' | 'farm';
@@ -49,7 +68,9 @@ type OpenPanel = 'droneBay' | 'farm';
 export class FarmScene extends Phaser.Scene {
   private mapTop = 0;
   private mapHeight = 0;
-  private k = 1;
+  /** Screen units per map metre, across and down (the map stretches to fill tall screens). */
+  private kx = 1;
+  private ky = 1;
   private viewed: FarmId = 'junkyard';
   /** Everything drawn for the farm on screen, rebuilt when switching farms. */
   private mapObjects: Phaser.GameObjects.GameObject[] = [];
@@ -58,6 +79,7 @@ export class FarmScene extends Phaser.Scene {
   private readonly lockIcons = new Map<string, Phaser.GameObjects.Image>();
   private readonly droneSprites: DroneSprite[] = [];
   private garagePoint = { x: 0, y: 0 };
+  private fx: FarmFx | null = null;
 
   // Farm switcher.
   private switcher: Phaser.GameObjects.GameObject[] = [];
@@ -88,9 +110,11 @@ export class FarmScene extends Phaser.Scene {
     this.cameras.main.setViewport(content.x, content.y, content.width, content.height);
     const width = content.width;
     this.mapHeight = content.height - PANEL_HEIGHT - BOTTOM_PAD;
-    this.k = width / MAP_WIDTH;
-    // The garage sits near the bottom; taller screens show more ground above.
-    this.mapTop = this.mapHeight - MAP_HEIGHT * this.k;
+    this.kx = width / MAP_WIDTH;
+    // The map fills the whole area above the info panel: taller screens spread the piles out
+    // further down the screen (distances for the drones stay in metres, so nothing else changes).
+    this.mapTop = MAP_TOP_MARGIN;
+    this.ky = (this.mapHeight - MAP_TOP_MARGIN) / MAP_HEIGHT;
 
     // Start on the farm where most drones are.
     const crews = crewsOf(this.ctx.model.state.farm);
@@ -122,7 +146,8 @@ export class FarmScene extends Phaser.Scene {
   }
 
   update(time: number, deltaMs: number): void {
-    this.updateDrones(time);
+    this.updateDrones(time, deltaMs / 1000);
+    this.fx?.update(deltaMs / 1000, time);
     this.refreshTimer += deltaMs / 1000;
     if (this.refreshTimer >= 0.3) {
       this.refreshTimer = 0;
@@ -137,7 +162,7 @@ export class FarmScene extends Phaser.Scene {
 
   /** Map metres to screen position. */
   private toScreen(p: { x: number; y: number }): { x: number; y: number } {
-    return { x: p.x * this.k, y: this.mapTop + p.y * this.k };
+    return { x: p.x * this.kx, y: this.mapTop + p.y * this.ky };
   }
 
   private unlockedFarms(): FarmId[] {
@@ -178,17 +203,31 @@ export class FarmScene extends Phaser.Scene {
     };
     ensureGridTexture(this, groundKey, () => {
       const g = buildFarmGround(gw, gh, 5 + FARM_IDS.indexOf(def.id), def.ground, def.id);
+      drawGarageRoad(g, toGround(GARAGE_POSITION), def.ground);
       for (const deposit of def.deposits) drawTracks(g, toGround(GARAGE_POSITION), toGround(deposit), def.ground.track);
+      drawYardEdge(g, def.id, 3 + FARM_IDS.indexOf(def.id));
       return g;
     });
     add(this.add.image(0, 0, groundKey).setOrigin(0).setScale(GROUND_SCALE).setDepth(-1000));
+    const vignetteKey = `farm/vignette/${gw}x${gh}`;
+    ensureGridTexture(this, vignetteKey, () => buildVignette(gw, gh));
+    add(this.add.image(0, 0, vignetteKey).setOrigin(0).setScale(GROUND_SCALE).setAlpha(0.3).setDepth(FARM_DEPTH.vignette));
+    /** A soft shadow under something standing on the ground. */
+    const shadow = (x: number, y: number, width: number) => {
+      const wPx = Math.max(6, Math.round(width / GROUND_SCALE));
+      const hPx = Math.max(3, Math.round(wPx * 0.32));
+      const key = `farm/shadow/${wPx}x${hPx}`;
+      ensureGridTexture(this, key, () => buildContactShadow(wPx, hPx));
+      return add(this.add.image(x, y, key).setScale(GROUND_SCALE).setAlpha(0.22).setDepth(-500));
+    };
 
     def.wrecks.forEach((p, i) => {
       const seed = FARM_IDS.indexOf(def.id) * 10 + i + 1;
       const key = `farm/wreck/${seed}`;
       ensureGridTexture(this, key, () => buildWreck(seed));
       const s = this.toScreen(p);
-      add(this.add.image(s.x, s.y, key).setScale(BUILDING_SCALE).setDepth(s.y));
+      const wreck = add(this.add.image(s.x, s.y, key).setScale(BUILDING_SCALE).setDepth(s.y));
+      shadow(s.x + 3, s.y + wreck.displayHeight * 0.3, wreck.displayWidth);
     });
 
     // Garage: its landing pad sits on the garage position.
@@ -197,11 +236,13 @@ export class FarmScene extends Phaser.Scene {
     this.garagePoint = g;
     const garageScale = BUILDING_SCALE + 1;
     add(this.add.image(g.x - 22 * garageScale, g.y - 34 * garageScale, 'farm/garage').setOrigin(0).setScale(garageScale).setDepth(g.y));
+    shadow(g.x + 10, g.y - 30, 44 * garageScale);
 
     // Deposits: tap to scavenge.
     for (const deposit of def.deposits) {
       const s = this.toScreen(deposit);
       const image = add(this.add.image(s.x, s.y, this.depositKey(deposit)).setScale(DEPOSIT_SCALE).setDepth(s.y));
+      shadow(s.x + 3, s.y + image.displayHeight * 0.25, image.displayWidth * 0.7);
       image.setInteractive({ useHandCursor: true });
       image.on('pointerdown', () => this.scavenge(deposit));
       this.depositImages.set(deposit.id, image);
@@ -221,6 +262,22 @@ export class FarmScene extends Phaser.Scene {
       sprite.crate.destroy();
     }
     this.refreshLocks();
+
+    this.fx?.destroy();
+    this.fx = new FarmFx(this, {
+      farm: def.id,
+      width,
+      height: this.mapHeight,
+      pad: g,
+      neon: { x: g.x, y: g.y - 72, width: 80 },
+      piles: () =>
+        farmDeposits(this.viewed).flatMap((d) => {
+          const img = this.depositImages.get(d.id);
+          if (!img) return [];
+          const stage = this.depositStages.get(d.id) ?? 0;
+          return [{ id: d.id, x: img.x, y: img.y, width: img.displayWidth, height: img.displayHeight, visible: stage > 0 && img.alpha >= 1 }];
+        }),
+    });
   }
 
   /** The farm's name under the garage, with arrows to the other unlocked farms. */
@@ -301,10 +358,14 @@ export class FarmScene extends Phaser.Scene {
     this.tweens.killTweensOf(image);
     image.setScale(DEPOSIT_SCALE);
     this.tweens.add({ targets: image, scaleX: DEPOSIT_SCALE * 1.08, scaleY: DEPOSIT_SCALE * 0.9, duration: 70, yoyo: true });
+    this.fx?.disturbed(deposit.id);
     if (!haul) {
       this.popup(image.x, image.y - 50, 'Picked clean', 0x9a98b8);
       return;
     }
+    const material = MATERIALS_BY_ID[deposit.material];
+    this.fx?.burst(image.x, image.y - 10, RARITIES[material.rarity].color);
+    this.fx?.flyIcon(image.x, image.y - 20, materialIconKey(this, deposit.material), 4);
     for (const id of MATERIAL_IDS) {
       if (haul.materials[id] > 0) {
         const material = MATERIALS_BY_ID[id];
@@ -339,7 +400,7 @@ export class FarmScene extends Phaser.Scene {
   }
 
   /** Keeps one sprite per drone working the viewed farm, positioned and animated. */
-  private updateDrones(time: number): void {
+  private updateDrones(time: number, dt: number): void {
     const model = this.ctx.model;
     const drones = model.farmSim.drones.filter((d) => d.farm === this.viewed);
     const droneModel = model.state.farm.droneModel;
@@ -347,10 +408,10 @@ export class FarmScene extends Phaser.Scene {
     const key = this.droneKey(droneModel, frame);
 
     while (this.droneSprites.length < drones.length) {
-      const shadow = this.add.ellipse(0, 0, 56, 20, 0x000000, 0.3).setDepth(3000);
-      const crate = this.add.rectangle(0, 0, 18, 14, 0xb3652d).setStrokeStyle(2, 0x1a1414).setDepth(3999).setVisible(false);
-      const body = this.add.image(0, 0, key).setScale(DRONE_SCALE).setDepth(4000);
-      this.droneSprites.push({ shadow, body, crate });
+      const shadow = this.add.ellipse(0, 0, 56, 20, 0x000000, 0.3).setDepth(FARM_DEPTH.droneShadow);
+      const crate = this.add.rectangle(0, 0, 18, 14, 0xb3652d).setStrokeStyle(2, 0x1a1414).setDepth(FARM_DEPTH.drone - 1).setVisible(false);
+      const body = this.add.image(0, 0, key).setScale(DRONE_SCALE).setDepth(FARM_DEPTH.drone);
+      this.droneSprites.push({ shadow, body, crate, phase: '', lastX: Number.NaN, sparkTimer: 0 });
     }
     while (this.droneSprites.length > drones.length) {
       const sprite = this.droneSprites.pop();
@@ -366,11 +427,33 @@ export class FarmScene extends Phaser.Scene {
       // Flying drones bob above their shadow; parked ones sit lower.
       const parked = drone.phase === 'waiting' || drone.phase === 'unloading';
       const altitude = (parked ? 30 : 70) + Math.sin(time / 300 + i * 1.7) * 6;
-      sprite.shadow.setPosition(ground.x, ground.y + 10);
+      // The shadow shrinks and fades the higher the drone flies.
+      const lift = (altitude - 24) / 60;
+      sprite.shadow.setPosition(ground.x, ground.y + 10).setScale(1 - lift * 0.3).setAlpha(0.95 - lift * 0.35);
+      // Lean into the direction of flight.
+      const vx = Number.isNaN(sprite.lastX) || dt <= 0 ? 0 : (ground.x - sprite.lastX) / dt;
+      sprite.lastX = ground.x;
+      const lean = Phaser.Math.Clamp(vx * 0.0025, -0.3, 0.3);
+      sprite.body.setRotation(Phaser.Math.Linear(sprite.body.rotation, lean, Math.min(1, dt * 8)));
       sprite.body.setPosition(ground.x, ground.y - altitude).setTexture(key);
       const carrying = drone.cargo > 0.01 && drone.material !== null;
       sprite.crate.setVisible(carrying).setPosition(ground.x, ground.y - altitude + 40);
       if (carrying && drone.material) sprite.crate.setFillStyle(RARITIES[MATERIALS_BY_ID[drone.material].rarity].color);
+
+      // Dust when lifting off from or landing on the pad; sparks while mining.
+      if (sprite.phase && sprite.phase !== drone.phase) {
+        const leaving = (sprite.phase === 'waiting' || sprite.phase === 'unloading') && drone.phase === 'outbound';
+        if (leaving || drone.phase === 'unloading') this.fx?.puff(ground.x, ground.y + 10);
+      }
+      sprite.phase = drone.phase;
+      if (drone.phase === 'mining') {
+        sprite.sparkTimer -= dt;
+        if (sprite.sparkTimer <= 0) {
+          sprite.sparkTimer = 0.18 + Math.random() * 0.2;
+          const color = drone.material ? RARITIES[MATERIALS_BY_ID[drone.material].rarity].color : 0xffc070;
+          this.fx?.sparks(ground.x + (Math.random() - 0.5) * 30, ground.y, color);
+        }
+      }
     });
   }
 

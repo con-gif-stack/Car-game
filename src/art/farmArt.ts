@@ -1,5 +1,5 @@
 import type { DepositKind, FarmId, GroundPalette } from '../data/farm';
-import { mix } from './color';
+import { dither, mix, shade } from './color';
 import { PixelGrid, seededRandom } from './PixelGrid';
 
 /*
@@ -95,6 +95,7 @@ export function buildFarmGround(w: number, h: number, seed: number, G: GroundPal
     case 'junkyard':
       break;
   }
+  addGroundDetails(g, rand, G, style);
   return g;
 }
 
@@ -416,5 +417,268 @@ export function buildDrone(model: number, frame: number): PixelGrid {
   if (model !== 0 || blur) g.set(Math.floor(c), Math.floor(c) - 1, styles.light);
   if (model === 0) g.set(Math.floor(c) + 2, Math.floor(c) + 2, 0xd0743a); // loose wire
   g.outline(OUTLINE);
+  return g;
+}
+
+const PUDDLE = 0x343c4c;
+const PUDDLE_SHINE = 0x8f9fbc;
+const WEED = [0x5f7032, 0x75873c, 0x4a5a28] as const;
+
+/**
+ * Bigger ground features so the yard isn't one flat texture: puddles that catch the sky,
+ * weeds, loose bolts, drain grates, and broad light and shade across the dunes.
+ */
+function addGroundDetails(g: PixelGrid, rand: () => number, G: GroundPalette, style: FarmId): void {
+  const w = g.width;
+  const h = g.height;
+  const area = w * h;
+  const puddle = (cx: number, cy: number, r: number) => {
+    g.paint(PUDDLE, (x, y) => ((x + 0.5 - cx) / (r * 1.7)) ** 2 + ((y + 0.5 - cy) / r) ** 2 <= 1);
+    // Sky glints along the far edge, a darker lip along the near one.
+    g.forEach((x, y, c) => {
+      if (c !== PUDDLE) return;
+      if (g.get(x, y - 1) !== PUDDLE && dither(x, y, 0.6)) g.set(x, y, PUDDLE_SHINE);
+      else if (g.get(x, y + 1) !== PUDDLE) g.set(x, y, shade(G.dark, -0.2));
+    });
+  };
+  const weeds = (count: number) => {
+    for (let i = 0; i < count; i++) {
+      const cx = Math.floor(rand() * w);
+      const cy = Math.floor(rand() * h);
+      for (let k = 0; k < 4 + rand() * 5; k++) {
+        const x = cx + Math.round((rand() - 0.5) * 5);
+        const y = cy + Math.round((rand() - 0.5) * 3);
+        const color = WEED[Math.floor(rand() * WEED.length)] ?? WEED[0];
+        g.set(x, y, color);
+        if (rand() < 0.6) g.set(x, y - 1, shade(color, 0.2));
+      }
+    }
+  };
+  switch (style) {
+    case 'junkyard': {
+      for (let i = 0; i < Math.max(3, area / 5000); i++) puddle(rand() * w, rand() * h, 2 + rand() * 2.5);
+      weeds(Math.round(area / 900));
+      // Loose bolts and scraps catching the light.
+      for (let i = 0; i < area / 400; i++) {
+        const x = Math.floor(rand() * w);
+        const y = Math.floor(rand() * h);
+        g.set(x, y, 0xa9adb8);
+        g.set(x, y + 1, 0x5d6068);
+      }
+      break;
+    }
+    case 'rustHighway': {
+      for (let i = 0; i < Math.max(2, area / 8000); i++) puddle(rand() * w, rand() * h, 2 + rand() * 2);
+      weeds(Math.round(area / 700));
+      break;
+    }
+    case 'industrial': {
+      for (let i = 0; i < Math.max(3, area / 6000); i++) puddle(rand() * w, rand() * h, 1.5 + rand() * 2.5);
+      // Drain grates on the slab joints.
+      for (let i = 0; i < area / 3000; i++) {
+        const x0 = Math.floor((rand() * w) / 14) * 14 + 5;
+        const y0 = Math.floor((rand() * h) / 14) * 14 + 5;
+        for (let y = 0; y < 4; y++) for (let x = 0; x < 5; x++) g.set(x0 + x, y0 + y, x % 2 === 0 ? 0x2a2a2e : 0x4a4a50);
+      }
+      weeds(Math.round(area / 2500));
+      break;
+    }
+    case 'desert': {
+      // Broad dune light and shade, then dry scrub.
+      g.forEach((x, y, c) => {
+        if (c === G.oil) return;
+        const dune = Math.sin(x * 0.045 + Math.sin(y * 0.03) * 2.2) * Math.cos(y * 0.05 + x * 0.01);
+        if (dune > 0.45 && dither(x, y, (dune - 0.45) * 2.5)) g.set(x, y, mix(G.light, 0xffffff, 0.12));
+        else if (dune < -0.45 && dither(x, y, (-dune - 0.45) * 2.5)) g.set(x, y, shade(G.dark, -0.06));
+      });
+      for (let i = 0; i < area / 1500; i++) {
+        const cx = Math.floor(rand() * w);
+        const cy = Math.floor(rand() * h);
+        for (let k = 0; k < 6; k++) g.set(cx + Math.round((rand() - 0.5) * 4), cy + Math.round((rand() - 0.5) * 3), k % 2 ? 0x8a6a3a : 0x6e5430);
+      }
+      break;
+    }
+  }
+}
+
+/**
+ * The yard's boundary, drawn onto the ground around the left, right and top edges: a chain-link
+ * fence (Junkyard), guardrail under a row of pines (truck stop), a brick wall with a pipe
+ * (factory), or rock outcrops (desert).
+ */
+export function drawYardEdge(g: PixelGrid, style: FarmId, seed: number): void {
+  const rand = seededRandom(seed);
+  const w = g.width;
+  const h = g.height;
+  const side = (fn: (x: number, y: number, inner: number) => void, depth: number) => {
+    for (let y = 0; y < h; y++) for (let d = 0; d < depth; d++) {
+      fn(d, y, d);
+      fn(w - 1 - d, y, d);
+    }
+  };
+  switch (style) {
+    case 'junkyard': {
+      const post = 0x6c6f7a;
+      const mesh = 0x9a9ca6;
+      // Top: the fence seen from the front, with posts and diamond mesh.
+      for (let x = 0; x < w; x++) {
+        for (let y = 0; y < 7; y++) {
+          if (y === 0) g.set(x, y, mix(mesh, 0xffffff, 0.2));
+          else if (x % 12 === 0) g.set(x, y, post);
+          else if ((x + y) % 3 === 0 || (x - y + 300) % 3 === 0) g.set(x, y, mesh);
+        }
+        g.set(x, 7, 0x2a2420);
+      }
+      // Sides: the fence seen from above, a rail with posts.
+      side((x, y, d) => {
+        if (d === 1) g.set(x, y, y % 12 < 2 ? post : mesh);
+        else if (d === 0 && y % 12 < 2) g.set(x, y, shade(post, -0.3));
+        else if (d === 2 && y % 12 < 2) g.set(x, y, 0x2a2420);
+      }, 3);
+      break;
+    }
+    case 'rustHighway': {
+      // Pine tops along the top, a steel guardrail in front of them.
+      for (let x = -4; x < w + 4; x += 5 + Math.floor(rand() * 3)) {
+        const r = 3 + rand() * 2;
+        const cy = 2 + rand() * 2;
+        g.paint(0x1f3a2e, (px, py) => Math.hypot(px + 0.5 - x, (py + 0.5 - cy) * 1.2) < r);
+        g.paint(0x2e5240, (px, py, c) => c === 0x1f3a2e && px + 0.5 < x && py + 0.5 < cy);
+      }
+      for (let x = 0; x < w; x++) {
+        g.set(x, 7, 0xb8bcc6);
+        g.set(x, 8, 0x8a8e98);
+        g.set(x, 9, x % 10 === 0 ? 0x5a5e68 : 0x2a2c32);
+      }
+      side((x, y, d) => {
+        if (d === 0) g.set(x, y, 0x8a8e98);
+        else if (d === 1) g.set(x, y, y % 10 === 0 ? 0x5a5e68 : 0xb8bcc6);
+      }, 2);
+      break;
+    }
+    case 'industrial': {
+      const brick = 0x7a4a3a;
+      const brickDark = 0x5e382c;
+      const mortar = 0x4a3a34;
+      const wall = (x: number, y: number) => {
+        const row = Math.floor(y / 2);
+        const offset = row % 2 === 0 ? 0 : 3;
+        return y % 2 === 1 || (x + offset) % 6 === 0 ? mortar : (x + row) % 5 === 0 ? brickDark : brick;
+      };
+      for (let x = 0; x < w; x++) {
+        for (let y = 0; y < 8; y++) g.set(x, y, y === 0 ? 0x9a9a9e : wall(x, y));
+        // A pipe running along the wall, with joints.
+        g.set(x, 4, x % 16 === 0 ? 0x5a5e66 : 0x9aa0aa);
+        g.set(x, 5, 0x6a7078);
+        g.set(x, 8, 0x222226);
+      }
+      side((x, y, d) => {
+        if (d < 2) g.set(x, y, d === 0 ? 0x9a9a9e : wall(y, x));
+        else g.set(x, y, 0x3a3a3e);
+      }, 3);
+      break;
+    }
+    case 'desert': {
+      // Sandstone outcrops along the edges, lit from the top left.
+      const rock = (cx: number, cy: number, r: number) => {
+        g.paint(0x9a643c, (x, y) => ((x + 0.5 - cx) / r) ** 2 + ((y + 0.5 - cy) / (r * 0.8)) ** 2 <= 1);
+        g.paint(0xc8875a, (x, y, c) => c === 0x9a643c && x + 0.5 < cx + r * 0.1 && y + 0.5 < cy);
+        g.paint(0x6e4428, (_x, y, c) => c === 0x9a643c && y + 0.5 > cy + r * 0.4);
+      };
+      for (let x = 0; x < w; x += 6 + Math.floor(rand() * 8)) rock(x, 2 + rand() * 3, 3 + rand() * 3);
+      for (let y = 10; y < h; y += 8 + Math.floor(rand() * 14)) {
+        rock(rand() * 3, y, 2.5 + rand() * 2.5);
+        rock(w - 1 - rand() * 3, y + 4, 2.5 + rand() * 2.5);
+      }
+      break;
+    }
+  }
+}
+
+/** A road leaving the garage pad down off the bottom of the map. */
+export function drawGarageRoad(g: PixelGrid, from: { x: number; y: number }, G: GroundPalette): void {
+  const half = 7;
+  const packed = mix(G.track, G.dark, 0.5);
+  const gravel = mix(G.gravel, G.light, 0.5);
+  for (let y = Math.round(from.y); y < g.height; y++) {
+    for (let dx = -half; dx <= half; dx++) {
+      const x = Math.round(from.x) + dx;
+      const edge = Math.abs(dx) === half;
+      const rut = Math.abs(dx) === 3 || Math.abs(dx) === 4;
+      const color = edge ? (dither(x, y, 0.5) ? gravel : G.light) : rut ? shade(G.track, -0.25) : dither(x, y, 0.2) ? G.track : packed;
+      g.set(x, y, color);
+    }
+  }
+}
+
+/** A soft dithered ellipse, drawn black at low alpha under things standing on the ground. */
+export function buildContactShadow(w: number, h: number): PixelGrid {
+  const g = new PixelGrid(w, h);
+  g.forEach((x, y) => {
+    const d = Math.hypot((x + 0.5 - w / 2) / (w / 2), (y + 0.5 - h / 2) / (h / 2));
+    if (d <= 1 && dither(x, y, 1.25 - d)) g.set(x, y, 0x000000);
+  });
+  return g;
+}
+
+/** A big, soft cloud shadow that drifts across the yard (drawn black at low alpha). */
+export function buildCloudShadow(w: number, h: number, seed: number): PixelGrid {
+  const rand = seededRandom(seed);
+  const blobs = Array.from({ length: 5 }, () => ({ x: w * (0.25 + rand() * 0.5), y: h * (0.3 + rand() * 0.4), r: Math.min(w, h) * (0.2 + rand() * 0.2) }));
+  const g = new PixelGrid(w, h);
+  g.forEach((x, y) => {
+    let best = 0;
+    for (const b of blobs) best = Math.max(best, 1 - Math.hypot((x - b.x) / (b.r * 1.5), (y - b.y) / b.r));
+    if (best > 0 && dither(x, y, Math.min(1, best * 2.2))) g.set(x, y, 0x000000);
+  });
+  return g;
+}
+
+/** Darkness gathering at the edges of the screen (drawn black at low alpha). */
+export function buildVignette(w: number, h: number): PixelGrid {
+  const g = new PixelGrid(w, h);
+  const band = Math.min(w, h) * 0.18;
+  g.forEach((x, y) => {
+    const edge = Math.min(x, y, w - 1 - x, h - 1 - y);
+    const t = 1 - edge / band;
+    if (t > 0 && dither(x, y, t * t)) g.set(x, y, 0x000000);
+  });
+  return g;
+}
+
+/** A crow seen from above: folded (frame 0) or wings spread (frame 1). */
+export function buildCrow(frame: number): PixelGrid {
+  const g = new PixelGrid(9, 7);
+  const body = 0x1a1820;
+  const sheen = 0x3a3a52;
+  for (let y = 2; y < 6; y++) for (let x = 3; x < 6; x++) g.set(x, y, body);
+  g.set(4, 1, body);
+  g.set(4, 0, 0xd8a040);
+  g.set(4, 6, body);
+  if (frame === 1) {
+    for (let x = 0; x < 3; x++) {
+      g.set(x, 3, body);
+      g.set(8 - x, 3, body);
+      g.set(x, 2, x === 1 ? sheen : body);
+      g.set(8 - x, 2, x === 1 ? sheen : body);
+    }
+  } else {
+    g.set(4, 3, sheen);
+  }
+  return g;
+}
+
+/** A tumbleweed: a loose ball of dry twigs (two frames for rolling). */
+export function buildTumbleweed(frame: number): PixelGrid {
+  const g = new PixelGrid(11, 11);
+  const colors = [0x8a6a3a, 0xa8844a, 0x6e5430];
+  for (let i = 0; i < 26; i++) {
+    const a = (i / 26) * Math.PI * 2 + frame * 0.6;
+    const r = 2 + ((i * 7) % 4);
+    const x = Math.round(5 + Math.cos(a) * r);
+    const y = Math.round(5 + Math.sin(a) * r);
+    g.set(x, y, colors[i % 3] ?? 0x8a6a3a);
+  }
+  g.outline(0x3a2a18);
   return g;
 }
