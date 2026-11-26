@@ -1,33 +1,31 @@
 import Phaser from 'phaser';
-import { formatDistance, formatDuration, formatNumber, formatPrecise } from '../core/format';
+import { formatDistance, formatDuration, formatNumber } from '../core/format';
 import type { RunSummary } from '../core/GameModel';
 import { milestoneProgress, nextDistanceMilestone } from '../core/milestones';
-import { stepRun, type RunState } from '../core/run';
+import { runCarFromStats, stepRun, type RunState } from '../core/run';
+import { computeCarStats } from '../core/vehicle';
 import { BIOMES, BIOMES_BY_ID, type BiomeId } from '../data/biomes';
 import { FUEL_TANKS } from '../data/economy';
 import { MATERIAL_IDS, MATERIALS, RARITIES, type MaterialId } from '../data/materials';
-import { COLORS, TEXT_COLORS } from '../ui/theme';
+import { COLORS, TEXT_COLORS, UI_PIXEL } from '../ui/theme';
 import type { AppContext } from './context';
+import { dialMax, FuelCans, Odometer, RouteStrip, Speedometer } from './driveHud';
 import { DRIVE_DEPTH, DriveView } from './DriveView';
-import { cssColor, Panel } from './panel';
+import { cssColor } from './panel';
+import { openRunResults, type RunResults } from './runResults';
 import { overlayStyle, textStyle } from './textStyles';
-import { materialIconKey, moneyIconKey } from './textures';
+import { materialIconKey } from './textures';
+import { addButton, addFrame, glowKey, PixelBar, type PixelButton, uiIconKey } from './ui';
 
 const PAD = 32;
 /** Height of the panel area under the road. */
 const PANEL_HEIGHT = 470;
 /** Space left at the bottom (the dev status line sits here). */
 const BOTTOM_PAD = 48;
+/** Speedometer size in UI pixels. */
+const DIAL_PX = 38;
 
-interface Button {
-  rect: Phaser.GameObjects.Rectangle;
-  label: Phaser.GameObjects.Text;
-}
-
-interface Bar {
-  fill: Phaser.GameObjects.Rectangle;
-  width: number;
-}
+type Toggle = Phaser.GameObjects.GameObject & Phaser.GameObjects.Components.Visible;
 
 /**
  * Drive tab: start a run, watch the car drive the biome road until its fuel or health runs
@@ -36,32 +34,36 @@ interface Bar {
 export class DriveScene extends Phaser.Scene {
   private drive!: DriveView;
   private run: RunState | null = null;
-  private results: Phaser.GameObjects.Container | null = null;
+  private results: RunResults | null = null;
   private stageHeight = 0;
 
   // Stage overlay.
+  private biomePlate!: Phaser.GameObjects.Image;
   private biomeLabel!: Phaser.GameObjects.Text;
-  private speedLabel!: Phaser.GameObjects.Text;
-  private banner!: Phaser.GameObjects.Text;
+  private speedometer!: Speedometer;
+  private route!: RouteStrip;
+  private banner!: Phaser.GameObjects.Container;
+  private bannerText!: Phaser.GameObjects.Text;
 
   // Before a run.
-  private readonly preRun: Phaser.GameObjects.GameObject[] = [];
+  private readonly preRun: Toggle[] = [];
   private bestText!: Phaser.GameObjects.Text;
   private nextText!: Phaser.GameObjects.Text;
-  private nextBar!: Bar;
-  private tankIcons: Phaser.GameObjects.Rectangle[] = [];
+  private nextBar!: PixelBar;
+  private cans!: FuelCans;
   private fuelText!: Phaser.GameObjects.Text;
-  private startButton!: Button;
+  private startButton!: PixelButton;
 
   // During a run.
-  private readonly duringRun: Phaser.GameObjects.GameObject[] = [];
-  private distanceText!: Phaser.GameObjects.Text;
+  private readonly duringRun: Toggle[] = [];
+  private odometer!: Odometer;
   private recordText!: Phaser.GameObjects.Text;
-  private fuelBar!: Bar;
-  private healthBar!: Bar;
+  private fuelBar!: PixelBar;
+  private healthBar!: PixelBar;
   private aheadText!: Phaser.GameObjects.Text;
+  private passedBest = false;
   private lastWholeFinds = {} as Record<MaterialId, number>;
-  private readonly popupQueue: { label: string; color: number }[] = [];
+  private readonly popupQueue: { material: MaterialId; amount: number }[] = [];
   private popupTimer = 0;
   private popupSlot = 0;
 
@@ -77,15 +79,11 @@ export class DriveScene extends Phaser.Scene {
     const width = content.width;
     this.stageHeight = content.height - PANEL_HEIGHT - BOTTOM_PAD;
 
-    this.drive = new DriveView(this, width, this.stageHeight, this.ctx.model.activeCar, 'junkyard');
+    this.drive = new DriveView(this, width, this.stageHeight, this.ctx.model.activeCar, 'junkyard', { pulledBack: true });
     this.createOverlay(width);
 
     const panelY = this.stageHeight + 20;
-    this.add
-      .rectangle(PAD, panelY, width - 2 * PAD, PANEL_HEIGHT - 32, COLORS.panel)
-      .setOrigin(0)
-      .setRounded(24)
-      .setStrokeStyle(3, COLORS.panelBorder);
+    addFrame(this, PAD, panelY, width - 2 * PAD, PANEL_HEIGHT - 32);
     this.createPreRun(width, panelY);
     this.createRunHud(width, panelY);
     this.showPreRun();
@@ -109,7 +107,9 @@ export class DriveScene extends Phaser.Scene {
       if (run.finished) this.endRun();
     } else {
       this.drive.update(dt, 0);
+      this.speedometer.set(0);
     }
+    this.speedometer.update(dt);
 
     this.refreshTimer += dt;
     if (!this.run && this.refreshTimer >= 0.5) {
@@ -120,146 +120,139 @@ export class DriveScene extends Phaser.Scene {
 
   private createOverlay(width: number): void {
     const d = DRIVE_DEPTH.overlay;
-    this.biomeLabel = this.add.text(PAD, 24, '', overlayStyle(44, TEXT_COLORS.primary, true)).setDepth(d);
-    this.speedLabel = this.add
-      .text(width - PAD, 24, '', overlayStyle(40, cssColor(COLORS.accentAlt), true))
-      .setOrigin(1, 0)
-      .setDepth(d);
+    this.route = new RouteStrip(this, PAD, 34, width - 2 * PAD, d);
+
+    this.biomePlate = addFrame(this, PAD, 92, 200, 64, { kind: 'card' }).setDepth(d - 0.01);
+    this.biomeLabel = this.add.text(PAD + 24, 124, '', overlayStyle(36, TEXT_COLORS.primary, true)).setOrigin(0, 0.5).setDepth(d);
+
+    const dialRadius = (DIAL_PX * UI_PIXEL) / 2;
+    this.speedometer = new Speedometer(this, width - PAD - dialRadius, 92 + dialRadius, DIAL_PX, d);
+
+    // Biome banner: a plate that springs open when the road enters a new biome.
+    const plate = addFrame(this, 0, 0, width - 200, 110, { kind: 'plate', color: COLORS.accentWarm, originX: 0.5, originY: 0.5 });
+    this.bannerText = this.add.text(0, -4, '', overlayStyle(56, TEXT_COLORS.primary, true)).setOrigin(0.5);
+    const glow = this.add
+      .image(0, 0, glowKey(this, 32, COLORS.accentWarm))
+      .setScale((width / 64) * 1.1, 3)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setAlpha(0.5);
     this.banner = this.add
-      .text(width / 2, this.stageHeight * 0.32, '', { ...overlayStyle(64, TEXT_COLORS.primary, true), align: 'center' })
-      .setOrigin(0.5)
+      .container(width / 2, this.stageHeight * 0.36, [glow, plate, this.bannerText])
       .setDepth(d)
       .setAlpha(0);
-    this.biomeLabel.setText(BIOMES_BY_ID.junkyard.name);
+    this.setBiomeLabel('junkyard');
+  }
+
+  /** Biome name in a plate edged with the biome's glow colour. */
+  private setBiomeLabel(biome: BiomeId): void {
+    const def = BIOMES_BY_ID[biome];
+    this.biomeLabel.setText(def.name);
+    const depth = this.biomePlate.depth;
+    this.biomePlate.destroy();
+    this.biomePlate = addFrame(this, PAD, 92, this.biomeLabel.width + 48, 64, { kind: 'card', color: def.palette.glow }).setDepth(depth);
   }
 
   private createPreRun(width: number, top: number): void {
-    const left = PAD + 32;
-    const right = width - PAD - 32;
-    const add = <T extends Phaser.GameObjects.GameObject>(obj: T) => {
+    const left = PAD + 36;
+    const right = width - PAD - 36;
+    const add = <T extends Toggle>(obj: T) => {
       this.preRun.push(obj);
       return obj;
     };
 
-    add(this.add.text(left, top + 26, 'BEST RUN', textStyle(24, TEXT_COLORS.muted, true)));
-    this.bestText = add(this.add.text(left, top + 54, '', textStyle(52, TEXT_COLORS.primary, true)));
+    add(this.add.image(left, top + 66, uiIconKey(this, 'trophy')).setOrigin(0, 0.5).setScale(UI_PIXEL));
+    add(this.add.text(left + 84, top + 26, 'BEST RUN', textStyle(22, TEXT_COLORS.muted)));
+    this.bestText = add(this.add.text(left + 84, top + 50, '', textStyle(50, TEXT_COLORS.primary)));
 
-    this.nextText = add(this.add.text(left, top + 132, '', textStyle(26, TEXT_COLORS.secondary)));
-    this.nextBar = this.makeBar(left, top + 178, right - left, 16, COLORS.accent, (o) => add(o));
+    add(this.add.image(left, top + 152, uiIconKey(this, 'flag')).setOrigin(0, 0.5).setScale(UI_PIXEL * 0.75));
+    this.nextText = add(this.add.text(left + 64, top + 152, '', textStyle(25, TEXT_COLORS.secondary)).setOrigin(0, 0.5));
+    this.nextBar = new PixelBar(this, left, top + 196, right - left, 24, COLORS.accentWarm, { segment: 8 });
+    for (const obj of this.nextBar.objects) add(obj);
 
     // Fuel tanks.
-    add(this.add.text(left, top + 214, 'FUEL', textStyle(24, TEXT_COLORS.muted, true)));
-    this.tankIcons = Array.from({ length: FUEL_TANKS.max }, (_, i) =>
-      add(this.add.rectangle(left + 90 + i * 64, top + 226, 48, 30, COLORS.panelRaised).setOrigin(0, 0.5).setRounded(8)),
-    );
-    this.fuelText = add(
-      this.add.text(left + 90 + FUEL_TANKS.max * 64 + 12, top + 226, '', textStyle(26, TEXT_COLORS.secondary)).setOrigin(0, 0.5),
-    );
+    add(this.add.text(left, top + 256, 'FUEL', textStyle(22, TEXT_COLORS.muted)).setOrigin(0, 0.5));
+    this.cans = new FuelCans(this, left + 90, top + 256, FUEL_TANKS.max);
+    for (const obj of this.cans.objects) add(obj as Toggle);
+    this.fuelText = add(this.add.text(this.cans.right + 12, top + 256, '', textStyle(24, TEXT_COLORS.secondary)).setOrigin(0, 0.5));
 
-    this.startButton = this.makeButton(width / 2, top + 330, right - left, 112, 'Start run', COLORS.accent, () =>
-      this.startRun(),
+    this.startButton = add(
+      addButton(this, width / 2, top + 372, right - left, 108, 'START RUN', {
+        onClick: () => this.startRun(),
+        tone: 'primary',
+        fontSize: 42,
+        icon: uiIconKey(this, 'flag', 0x3a2410),
+      }),
     );
-    add(this.startButton.rect);
-    add(this.startButton.label);
   }
 
   private createRunHud(width: number, top: number): void {
-    const left = PAD + 32;
-    const right = width - PAD - 32;
-    const add = <T extends Phaser.GameObjects.GameObject>(obj: T) => {
+    const left = PAD + 36;
+    const right = width - PAD - 36;
+    const add = <T extends Toggle>(obj: T) => {
       this.duringRun.push(obj);
       return obj;
     };
 
-    add(this.add.text(left, top + 26, 'DISTANCE', textStyle(24, TEXT_COLORS.muted, true)));
-    this.distanceText = add(this.add.text(left, top + 54, '', textStyle(64, TEXT_COLORS.primary, true)));
-    this.recordText = add(this.add.text(right, top + 70, '', textStyle(28, TEXT_COLORS.secondary, true)).setOrigin(1, 0));
+    add(this.add.text(left, top + 22, 'DISTANCE', textStyle(22, TEXT_COLORS.muted)));
+    this.odometer = new Odometer(this, left, top + 50);
+    for (const obj of this.odometer.objects) add(obj as Toggle);
+    this.recordText = add(this.add.text(right, top + 90, '', overlayStyle(30, TEXT_COLORS.secondary, true)).setOrigin(1, 0.5));
 
-    add(this.add.text(left, top + 150, 'Fuel', textStyle(26, TEXT_COLORS.secondary)));
-    this.fuelBar = this.makeBar(left + 130, top + 166, right - left - 130, 18, COLORS.money, (o) => add(o));
-    add(this.add.text(left, top + 196, 'Health', textStyle(26, TEXT_COLORS.secondary)));
-    this.healthBar = this.makeBar(left + 130, top + 212, right - left - 130, 18, 0x6fe08a, (o) => add(o));
+    const barLeft = left + 70;
+    add(this.add.image(left, top + 186, uiIconKey(this, 'fuel')).setOrigin(0, 0.5).setScale(UI_PIXEL * 0.75));
+    this.fuelBar = new PixelBar(this, barLeft, top + 186, right - barLeft, 32, COLORS.money, { segment: 10, lowAt: 0.2 });
+    add(this.add.image(left, top + 240, uiIconKey(this, 'wrench')).setOrigin(0, 0.5).setScale(UI_PIXEL * 0.75));
+    this.healthBar = new PixelBar(this, barLeft, top + 240, right - barLeft, 32, COLORS.good, { segment: 10, lowAt: 0.2 });
+    for (const obj of [...this.fuelBar.objects, ...this.healthBar.objects]) add(obj);
 
-    this.aheadText = add(this.add.text(left, top + 250, '', textStyle(26, TEXT_COLORS.secondary)));
+    add(this.add.image(left, top + 292, uiIconKey(this, 'flag')).setOrigin(0, 0.5).setScale(UI_PIXEL * 0.6));
+    this.aheadText = add(this.add.text(left + 56, top + 292, '', textStyle(24, TEXT_COLORS.secondary)).setOrigin(0, 0.5));
 
-    const skip = this.makeButton(width / 2, top + 340, right - left, 92, 'Skip to the end', COLORS.panelBorder, () =>
-      this.skipRun(),
+    add(
+      addButton(this, width / 2, top + 382, right - left, 80, 'Skip to the end', {
+        onClick: () => this.skipRun(),
+        tone: 'neutral',
+        fontSize: 30,
+      }),
     );
-    add(skip.rect);
-    add(skip.label);
-  }
-
-  private makeBar(
-    x: number,
-    y: number,
-    width: number,
-    height: number,
-    color: number,
-    register: (obj: Phaser.GameObjects.GameObject) => void,
-  ): Bar {
-    register(this.add.rectangle(x, y, width, height, COLORS.panelRaised).setOrigin(0, 0.5).setRounded(height / 2));
-    const fill = this.add.rectangle(x, y, width, height, color).setOrigin(0, 0.5).setRounded(height / 2);
-    register(fill);
-    return { fill, width };
-  }
-
-  private setBar(bar: Bar, ratio: number): void {
-    const r = Phaser.Math.Clamp(ratio, 0, 1);
-    bar.fill.setVisible(r > 0);
-    bar.fill.setSize(Math.max(bar.fill.height, bar.width * r), bar.fill.height);
-  }
-
-  private makeButton(x: number, y: number, width: number, height: number, label: string, color: number, onClick: () => void): Button {
-    const rect = this.add
-      .rectangle(x, y, width, height, COLORS.panelRaised)
-      .setRounded(24)
-      .setStrokeStyle(3, color)
-      .setInteractive({ useHandCursor: true });
-    rect.on('pointerup', () => {
-      if (rect.input?.enabled) onClick();
-    });
-    const text = this.add.text(x, y, label, textStyle(36, TEXT_COLORS.primary, true)).setOrigin(0.5);
-    return { rect, label: text };
   }
 
   private showPreRun(): void {
-    for (const obj of this.preRun) (obj as Phaser.GameObjects.Components.Visible & Phaser.GameObjects.GameObject).setVisible(true);
-    for (const obj of this.duringRun) (obj as Phaser.GameObjects.Components.Visible & Phaser.GameObjects.GameObject).setVisible(false);
-    this.speedLabel.setText('');
+    for (const obj of this.preRun) obj.setVisible(true);
+    for (const obj of this.duringRun) obj.setVisible(false);
     this.refreshPreRun();
   }
 
   private showRunHud(): void {
-    for (const obj of this.preRun) (obj as Phaser.GameObjects.Components.Visible & Phaser.GameObjects.GameObject).setVisible(false);
-    for (const obj of this.duringRun) (obj as Phaser.GameObjects.Components.Visible & Phaser.GameObjects.GameObject).setVisible(true);
+    for (const obj of this.preRun) obj.setVisible(false);
+    for (const obj of this.duringRun) obj.setVisible(true);
   }
 
   private refreshPreRun(): void {
     const { model } = this.ctx;
     const record = model.state.run;
     this.bestText.setText(record.runsCompleted > 0 ? formatDistance(record.bestDistanceKm) : 'No runs yet');
+    this.route.update(0, record.bestDistanceKm, record.bestDistanceKm);
+    this.speedometer.maxKmh = dialMax(runCarFromStats(computeCarStats(model.activeCar)).topSpeedKmh);
 
     const next = nextDistanceMilestone(model.state);
     if (next) {
       const { current, target } = milestoneProgress(model.state, next.condition);
       this.nextText.setText(`Next: ${next.title} · reach ${formatDistance(target)}`);
-      this.setBar(this.nextBar, current / target);
+      this.nextBar.set(current / target);
     } else {
       this.nextText.setText('Every milestone on the road reached. More road coming soon.');
-      this.setBar(this.nextBar, 1);
+      this.nextBar.set(1);
     }
 
     const fuel = model.fuel();
-    this.tankIcons.forEach((icon, i) => icon.setFillStyle(i < fuel.tanks ? COLORS.money : COLORS.panelRaised));
-    this.fuelText.setText(
-      fuel.tanks >= FUEL_TANKS.max ? 'Tanks full' : `Next tank in ${formatDuration(fuel.msUntilNext / 1000)}`,
-    );
+    const full = fuel.tanks >= FUEL_TANKS.max;
+    this.cans.set(fuel.tanks, full ? 1 : 1 - fuel.msUntilNext / (FUEL_TANKS.refillMinutes * 60_000));
+    this.fuelText.setText(full ? 'Tanks full' : `Next in ${formatDuration(fuel.msUntilNext / 1000)}`);
     const canStart = fuel.tanks >= 1;
-    this.startButton.rect.setFillStyle(canStart ? COLORS.panelRaised : COLORS.panel);
-    this.startButton.rect.setStrokeStyle(3, canStart ? COLORS.accent : COLORS.panelBorder);
-    if (this.startButton.rect.input) this.startButton.rect.input.enabled = canStart;
-    this.startButton.label.setText(canStart ? 'Start run' : `Out of fuel · ${formatDuration(fuel.msUntilNext / 1000)}`);
-    this.startButton.label.setColor(canStart ? TEXT_COLORS.primary : TEXT_COLORS.muted);
+    this.startButton.setEnabled(canStart);
+    this.startButton.pulse(canStart && !this.run);
+    this.startButton.setLabel(canStart ? 'START RUN' : `Out of fuel · ${formatDuration(fuel.msUntilNext / 1000)}`);
   }
 
   private startRun(): void {
@@ -267,6 +260,9 @@ export class DriveScene extends Phaser.Scene {
     const run = this.ctx.model.startRun();
     if (!run) return;
     this.run = run;
+    this.passedBest = false;
+    this.startButton.pulse(false);
+    this.speedometer.maxKmh = dialMax(run.car.topSpeedKmh);
     this.drive.car.setCar(this.ctx.model.activeCar);
     this.drive.setBiome('junkyard', true);
     this.drive.resetScroll();
@@ -282,7 +278,7 @@ export class DriveScene extends Phaser.Scene {
     if (!run || run.finished) return;
     while (!run.finished) stepRun(run, 1);
     this.drive.setBiome(run.biome.id, true);
-    this.biomeLabel.setText(run.biome.name);
+    this.setBiomeLabel(run.biome.id);
     this.updateRunHud(run);
     this.endRun();
   }
@@ -290,30 +286,36 @@ export class DriveScene extends Phaser.Scene {
   private enterBiome(biome: BiomeId): void {
     const def = BIOMES_BY_ID[biome];
     this.drive.setBiome(biome);
-    this.biomeLabel.setText(def.name);
-    this.banner.setText(def.name.toUpperCase());
+    this.setBiomeLabel(biome);
+    this.bannerText.setText(def.name.toUpperCase());
     this.tweens.killTweensOf(this.banner);
-    this.banner.setAlpha(0).setScale(0.9);
+    this.banner.setAlpha(0).setScale(0.6, 0.2);
     this.tweens.chain({
       targets: this.banner,
       tweens: [
-        { alpha: 1, scale: 1, duration: 300, ease: 'Back.easeOut' },
+        { alpha: 1, scaleX: 1, scaleY: 1, duration: 320, ease: 'Back.easeOut' },
         { alpha: 1, duration: 1200 },
-        { alpha: 0, duration: 400 },
+        { alpha: 0, scaleY: 0.2, duration: 300, ease: 'Cubic.easeIn' },
       ],
     });
   }
 
   private updateRunHud(run: RunState): void {
-    const best = this.ctx.model.state.run.bestDistanceKm;
-    this.distanceText.setText(formatDistance(run.distanceKm));
-    const firstRun = this.ctx.model.state.run.runsCompleted === 0;
+    const record = this.ctx.model.state.run;
+    const best = record.bestDistanceKm;
+    this.odometer.set(run.distanceKm);
+    const firstRun = record.runsCompleted === 0;
     const beyondBest = !firstRun && run.distanceKm > best;
     this.recordText.setText(firstRun ? 'First run' : beyondBest ? 'NEW BEST!' : `Best ${formatDistance(best)}`);
-    this.recordText.setColor(beyondBest ? TEXT_COLORS.accent : TEXT_COLORS.secondary);
-    this.speedLabel.setText(`${formatNumber(run.speedKmh)} km/h`);
-    this.setBar(this.fuelBar, run.fuel / run.car.tankSeconds);
-    this.setBar(this.healthBar, run.health / run.car.maxHealth);
+    this.recordText.setColor(beyondBest ? TEXT_COLORS.warm : TEXT_COLORS.secondary);
+    if (beyondBest && !this.passedBest) {
+      this.passedBest = true;
+      this.tweens.add({ targets: this.recordText, scale: { from: 1.6, to: 1 }, duration: 420, ease: 'Back.easeOut' });
+    }
+    this.speedometer.set(run.speedKmh);
+    this.route.update(run.distanceKm, best, Math.max(best, run.distanceKm));
+    this.fuelBar.set(run.fuel / run.car.tankSeconds);
+    this.healthBar.set(run.health / run.car.maxHealth);
 
     const nextBiome = BIOMES.find((b) => b.startKm > run.distanceKm);
     this.aheadText.setText(
@@ -326,9 +328,7 @@ export class DriveScene extends Phaser.Scene {
       const gained = whole - (this.lastWholeFinds[material.id] ?? 0);
       if (gained > 0) {
         // Fast cars find a lot at once: keep the queue short so pop-ups stay readable.
-        if (this.popupQueue.length < 3) {
-          this.popupQueue.push({ label: `+${gained} ${material.name}`, color: RARITIES[material.rarity].color });
-        }
+        if (this.popupQueue.length < 3) this.popupQueue.push({ material: material.id, amount: gained });
         this.lastWholeFinds[material.id] = whole;
       }
     }
@@ -340,23 +340,36 @@ export class DriveScene extends Phaser.Scene {
     if (!next || this.popupTimer < 0.25) return;
     this.popupQueue.shift();
     this.popupTimer = 0;
-    this.showPopup(next.label, next.color);
+    this.showPopup(next.material, next.amount);
   }
 
-  private showPopup(label: string, color: number): void {
+  /** "+2" with the material's icon, rising from the car; Rare and better finds glow. */
+  private showPopup(material: MaterialId, amount: number): void {
     const { car, scale } = this.drive;
+    const def = MATERIALS.find((m) => m.id === material);
+    if (!def) return;
+    const rarity = RARITIES[def.rarity];
     // Alternate left, centre and right so pop-ups in quick succession don't overlap.
     this.popupSlot = (this.popupSlot + 1) % 3;
-    const x = car.x + (this.popupSlot - 1) * 170;
+    const x = car.x + (this.popupSlot - 1) * 150;
     const y = car.y - 31 * scale - 10;
-    const popup = this.add.text(x, y, label, overlayStyle(32, cssColor(color), true)).setOrigin(0.5).setDepth(DRIVE_DEPTH.overlay);
-    this.tweens.add({ targets: popup, y: y - 80, alpha: 0, duration: 1100, onComplete: () => popup.destroy() });
+    const parts: Phaser.GameObjects.GameObject[] = [];
+    if (rarity.rank >= 2) {
+      parts.push(this.add.image(0, 0, glowKey(this, 16, rarity.color)).setScale(5).setBlendMode(Phaser.BlendModes.ADD).setAlpha(0.7));
+    }
+    parts.push(
+      this.add.image(-24, 0, materialIconKey(this, material)).setScale(4),
+      this.add.text(4, 0, `+${formatNumber(amount)}`, overlayStyle(34, cssColor(rarity.color), true)).setOrigin(0, 0.5),
+    );
+    const popup = this.add.container(x, y, parts).setDepth(DRIVE_DEPTH.overlay);
+    popup.setScale(0.6);
+    this.tweens.add({ targets: popup, scale: 1, duration: 160, ease: 'Back.easeOut' });
+    this.tweens.add({ targets: popup, y: y - 90, alpha: 0, delay: 250, duration: 950, onComplete: () => popup.destroy() });
   }
 
   private endRun(): void {
     const run = this.run;
     if (!run) return;
-    this.speedLabel.setText('');
     const summary = this.ctx.model.finishRun(run);
     // Let the car roll to a stop for a moment before the results appear.
     this.time.delayedCall(700, () => this.showResults(summary));
@@ -364,67 +377,16 @@ export class DriveScene extends Phaser.Scene {
 
   private showResults(summary: RunSummary): void {
     const { width, height } = this.cameras.main;
-    const panel = new Panel(this, { area: { x: 0, y: 0, width, height }, align: 'center' });
-    const reason = summary.endReason === 'breakdown' ? 'Your car broke down' : 'Out of fuel';
-    panel.text('RUN OVER', 28, TEXT_COLORS.accent, { bold: true, gapAfter: 6 });
-    panel.text(reason, 30, TEXT_COLORS.secondary, { gapAfter: 10 });
-    panel.text(formatDistance(summary.distanceKm), 88, TEXT_COLORS.primary, { bold: true, gapAfter: 4 });
-    panel.text(
-      summary.newBest ? 'New best distance!' : `Best: ${formatDistance(Math.max(summary.previousBestKm, summary.distanceKm))}`,
-      30,
-      summary.newBest ? TEXT_COLORS.accent : TEXT_COLORS.secondary,
-      { bold: summary.newBest, gapAfter: 20 },
-    );
-    panel.divider(12);
-
-    panel.row({
-      icon: moneyIconKey(this),
-      iconScale: 3,
-      title: 'Distance pay',
-      value: `+${formatPrecise(summary.money)}`,
-      valueColor: cssColor(COLORS.money),
-      size: 28,
-      gapAfter: 6,
-    });
-    if (summary.bonusMoney > 0) {
-      panel.row({
-        icon: moneyIconKey(this),
-        iconScale: 3,
-        title: 'New ground bonus',
-        value: `+${formatPrecise(summary.bonusMoney)}`,
-        valueColor: cssColor(COLORS.money),
-        size: 28,
-        gapAfter: 6,
-      });
-    }
-    for (const material of MATERIALS) {
-      const amount = summary.finds[material.id];
-      if (amount < 0.01) continue;
-      panel.row({
-        icon: materialIconKey(this, material.id),
-        iconScale: 3,
-        title: material.name,
-        titleColor: cssColor(RARITIES[material.rarity].color),
-        value: `+${formatPrecise(amount)}`,
-        size: 28,
-        gapAfter: 6,
-      });
-    }
-    for (const milestone of summary.milestones) {
-      panel.text(`★ ${milestone.title}`, 30, TEXT_COLORS.accent, { bold: true, gapAfter: 4 });
-    }
-    panel.gap(18);
-    panel.button('Back to the start', { onClick: () => this.closeResults() });
-    this.results = panel.finish();
+    this.results = openRunResults(this, summary, { x: 0, y: 0, width, height }, () => this.closeResults());
   }
 
   private closeResults(): void {
-    this.results?.destroy();
+    this.results?.container.destroy();
     this.results = null;
     this.run = null;
     this.drive.setBiome('junkyard', true);
     this.drive.resetScroll();
-    this.biomeLabel.setText(BIOMES_BY_ID.junkyard.name);
+    this.setBiomeLabel('junkyard');
     this.showPreRun();
   }
 }

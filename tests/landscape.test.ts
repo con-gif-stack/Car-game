@@ -1,13 +1,19 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildClouds,
+  buildFeature,
+  buildHaze,
   buildMountains,
   buildRoad,
   buildSky,
+  buildSkyDisc,
   buildTreeline,
+  buildVerge,
   LANE_PERIOD,
+  nearPalette,
   SUNSET_PALETTE,
 } from '../src/art/landscape';
+import { BIOMES } from '../src/data/biomes';
 import type { PixelGrid } from '../src/art/PixelGrid';
 
 const W = 144;
@@ -62,4 +68,40 @@ describe('landscape layers', () => {
   it('road width must fit the lane dash pattern', () => {
     expect(() => buildRoad(LANE_PERIOD * 10 + 1, 12, 4, 5)).toThrow();
   });
+
+  it('the verge and tinted roads wrap without a seam and fill their width', () => {
+    for (const biome of BIOMES) {
+      const verge = buildVerge(W, 30, 31, biome.palette);
+      expect(wrapsCleanly(verge)).toBe(true);
+      for (let x = 0; x < W; x++) expect(verge.get(x, 29)).not.toBeNull();
+      expect(wrapsCleanly(buildRoad(W, 13, 4, 5, biome.palette))).toBe(true);
+    }
+  });
+
+  it('every biome builds all of its layers', () => {
+    for (const biome of BIOMES) {
+      const p = biome.palette;
+      expect(buildSky(W, 80, 44, p, true).get(0, 79)).toBe(p.sky[p.sky.length - 1]);
+      expect(buildSkyDisc(7, p).width).toBe(42);
+      expect(buildHaze(W, 20, p).get(0, 19)).toBe(p.haze);
+      for (const g of [buildFeature(biome.feature, W, 30, 23, p), buildFeature(biome.feature, W, 15, 41, nearPalette(p))]) {
+        for (let x = 0; x < W; x++) expect(g.get(x, g.height - 1)).not.toBeNull();
+      }
+    }
+  });
+
+  it('night skies have stars; daytime skies do not', () => {
+    const count = (biomeIndex: number) => {
+      const p = BIOMES[biomeIndex]!.palette;
+      const plain = buildSky(W, 80, 44, p, false);
+      let differ = 0;
+      buildSky(W, 80, 44, p, true).forEach((x, y, c) => c !== plain.get(x, y) && differ++);
+      return differ;
+    };
+    const night = BIOMES.findIndex((b) => b.palette.night >= 0.5);
+    const day = BIOMES.findIndex((b) => b.palette.night < 0.5);
+    expect(count(night)).toBeGreaterThan(5);
+    expect(count(day)).toBe(0);
+  });
 });
+

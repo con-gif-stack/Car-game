@@ -58,6 +58,7 @@ export class Panel {
   private readonly placed: { obj: Placeable; y: number; group: number }[] = [];
   private cursor = 0;
   private group = 0;
+  private revealTimers: Phaser.Time.TimerEvent[] = [];
   private headerTitle: { text: string; color: number } | null = null;
 
   constructor(
@@ -120,7 +121,7 @@ export class Panel {
     valueColor?: string;
     size?: number;
     gapAfter?: number;
-    /** Icon pixel scale (icons are 12 pixels square). */
+    /** Icon pixel scale (material icons are 12 pixels square, interface icons 16). */
     iconScale?: number;
     /** Draws the row on a card. */
     card?: boolean;
@@ -128,7 +129,8 @@ export class Panel {
     this.group++;
     const size = opts.size ?? 30;
     const iconScale = opts.iconScale ?? ICON_SCALE;
-    const iconSize = opts.icon ? 12 * iconScale : 0;
+    const iconPx = opts.icon ? (this.scene.textures.get(opts.icon).getSourceImage().width as number) : 0;
+    const iconSize = iconPx * iconScale;
     const inset = opts.card ? 20 : 0;
     const textX = this.left + inset + (opts.icon ? iconSize + 18 : 0);
     const title = this.scene.add.text(textX, 0, opts.title, textStyle(size, opts.titleColor ?? TEXT_COLORS.primary, true));
@@ -244,14 +246,30 @@ export class Panel {
       last = Math.max(last, delay);
       obj.setVisible(false);
       const targetX = obj.x;
-      this.scene.time.delayedCall(delay, () => {
+      const timer = this.scene.time.delayedCall(delay, () => {
         if (!obj.active) return;
         obj.setVisible(true);
         obj.x = targetX - 40;
         this.scene.tweens.add({ targets: obj, x: targetX, duration: 220, ease: 'Cubic.easeOut' });
       });
+      // Skipping shows the line at once, in place.
+      (timer as Phaser.Time.TimerEvent & { reveal?: () => void }).reveal = () => {
+        this.scene.tweens.killTweensOf(obj);
+        obj.x = targetX;
+        obj.setVisible(true);
+      };
+      this.revealTimers.push(timer);
     }
     return last;
+  }
+
+  /** Shows every line still waiting to be revealed. */
+  skipReveal(): void {
+    for (const timer of this.revealTimers) {
+      timer.remove(false);
+      (timer as Phaser.Time.TimerEvent & { reveal?: () => void }).reveal?.();
+    }
+    this.revealTimers = [];
   }
 
   /** Number of the most recently added line (for `reveal`). */

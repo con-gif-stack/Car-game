@@ -10,6 +10,31 @@ export type BiomeId = 'junkyard' | 'rustHighway' | 'industrial' | 'desert' | 'be
 /** Silhouette drawn in the middle distance of the scenery. */
 export type SceneryFeature = 'junk' | 'pines' | 'factories' | 'mesas' | 'spires';
 
+/** Objects that pass by beside the road (built in src/art/props.ts). */
+export type PropKind =
+  | 'lamp'
+  | 'pole'
+  | 'fence'
+  | 'billboard'
+  | 'sign'
+  | 'wreck'
+  | 'tyres'
+  | 'barrel'
+  | 'cone'
+  | 'guardrail'
+  | 'pine'
+  | 'cactus'
+  | 'rock'
+  | 'grass'
+  | 'crystal';
+
+export interface BiomeProps {
+  /** Behind the road, on the far shoulder. */
+  roadside: readonly PropKind[];
+  /** In front of the road, close to the camera; drawn dark and passing fast. */
+  foreground: readonly PropKind[];
+}
+
 export interface BiomePalette {
   /** Sky bands, top to horizon. */
   sky: readonly number[];
@@ -25,6 +50,20 @@ export interface BiomePalette {
   featureLight: number;
   feature: number;
   featureDark: number;
+  /** Light from the sun or sky catching edges. */
+  rim: number;
+  /** Lamp, window and neon glow. */
+  glow: number;
+  /** Air between far layers and the camera. */
+  haze: number;
+  /** Ground in front of the road (light, base, dark). */
+  groundLight: number;
+  ground: number;
+  groundDark: number;
+  /** 0 = daylight, 1 = full night: sets lamp and headlight strength and stars. */
+  night: number;
+  /** Sun or moon over the horizon. */
+  disc: 'sun' | 'moon';
 }
 
 export interface BiomeDef {
@@ -46,6 +85,7 @@ export interface BiomeDef {
   findsPerKm: MaterialAmounts;
   palette: BiomePalette;
   feature: SceneryFeature;
+  props: BiomeProps;
 }
 
 export const BIOMES: readonly BiomeDef[] = [
@@ -74,8 +114,20 @@ export const BIOMES: readonly BiomeDef[] = [
       featureLight: 0x6a5048,
       feature: 0x4a3a38,
       featureDark: 0x33282a,
+      rim: 0xffb080,
+      glow: 0xffb35c,
+      haze: 0x9e5a4f,
+      groundLight: 0x6b5446,
+      ground: 0x4a3a33,
+      groundDark: 0x2c2222,
+      night: 0.5,
+      disc: 'sun',
     },
     feature: 'junk',
+    props: {
+      roadside: ['wreck', 'tyres', 'pole', 'fence', 'lamp', 'wreck'],
+      foreground: ['tyres', 'barrel', 'rock', 'grass', 'grass'],
+    },
   },
   {
     id: 'rustHighway',
@@ -102,8 +154,20 @@ export const BIOMES: readonly BiomeDef[] = [
       featureLight: 0x2e4277,
       feature: 0x1f2d5b,
       featureDark: 0x162147,
+      rim: 0xffc6b0,
+      glow: 0xffd08a,
+      haze: 0xbea1cd,
+      groundLight: 0x3f5a4a,
+      ground: 0x2b4038,
+      groundDark: 0x182624,
+      night: 0.35,
+      disc: 'sun',
     },
     feature: 'pines',
+    props: {
+      roadside: ['lamp', 'pine', 'sign', 'pine', 'billboard', 'pine'],
+      foreground: ['guardrail', 'grass', 'grass', 'rock'],
+    },
   },
   {
     id: 'industrial',
@@ -117,21 +181,34 @@ export const BIOMES: readonly BiomeDef[] = [
     moneyPerKm: 200,
     findsPerKm: { scrapMetal: 4, aluminum: 1, copperWire: 1, titanium: 0.15, carbonFiber: 0.06 },
     palette: {
-      sky: [0x2c2f38, 0x3a3d45, 0x4b4d52, 0x5e5e5c, 0x777163, 0x8f8467, 0xa8976b, 0xbca878, 0xc9b78a],
-      cloudLight: 0xb0a78f,
-      cloud: 0x8a8475,
-      cloudShadow: 0x66645c,
-      ridge: 0x57585e,
-      ridgeShadow: 0x4a4b51,
-      mountain: 0x3e4047,
-      mountainShadow: 0x33353b,
-      peak: 0x6a6a68,
-      peakShadow: 0x56575a,
+      // Smoggy night: the city glow turns the horizon sodium orange.
+      sky: [0x111220, 0x171826, 0x1f1f2e, 0x2a2836, 0x38323c, 0x4b3f42, 0x665046, 0x87654a, 0xa57c50],
+      cloudLight: 0x8c7462,
+      cloud: 0x5c5250,
+      cloudShadow: 0x3c3842,
+      ridge: 0x3e3b46,
+      ridgeShadow: 0x34323d,
+      mountain: 0x2c2b36,
+      mountainShadow: 0x23232d,
+      peak: 0x4e4852,
+      peakShadow: 0x3e3a45,
       featureLight: 0x4b4f5a,
       feature: 0x30333c,
       featureDark: 0x22242b,
+      rim: 0xffa860,
+      glow: 0xffa040,
+      haze: 0x4d4344,
+      groundLight: 0x4a4648,
+      ground: 0x34313a,
+      groundDark: 0x1c1b22,
+      night: 0.85,
+      disc: 'moon',
     },
     feature: 'factories',
+    props: {
+      roadside: ['lamp', 'fence', 'billboard', 'barrel', 'lamp', 'pole'],
+      foreground: ['barrel', 'cone', 'guardrail', 'rock'],
+    },
   },
   {
     id: 'desert',
@@ -158,8 +235,20 @@ export const BIOMES: readonly BiomeDef[] = [
       featureLight: 0xc46e42,
       feature: 0xa0522f,
       featureDark: 0x7a3c24,
+      rim: 0xfff0c8,
+      glow: 0xffd890,
+      haze: 0xeac9a0,
+      groundLight: 0xe0b07a,
+      ground: 0xc48a58,
+      groundDark: 0x8a5634,
+      night: 0.15,
+      disc: 'sun',
     },
     feature: 'mesas',
+    props: {
+      roadside: ['cactus', 'rock', 'sign', 'pole', 'cactus'],
+      foreground: ['rock', 'cactus', 'grass', 'rock'],
+    },
   },
   {
     id: 'beyond',
@@ -186,8 +275,20 @@ export const BIOMES: readonly BiomeDef[] = [
       featureLight: 0x5a3f92,
       feature: 0x3a2a66,
       featureDark: 0x261a47,
+      rim: 0xc8a0ff,
+      glow: 0x6af0ff,
+      haze: 0x553572,
+      groundLight: 0x4a3670,
+      ground: 0x2e2150,
+      groundDark: 0x170f2c,
+      night: 1,
+      disc: 'moon',
     },
     feature: 'spires',
+    props: {
+      roadside: ['crystal', 'lamp', 'rock', 'crystal'],
+      foreground: ['crystal', 'rock', 'rock'],
+    },
   },
 ];
 
