@@ -10,6 +10,12 @@ export type BiomeId = 'junkyard' | 'rustHighway' | 'industrial' | 'desert' | 'be
 /** Silhouette drawn in the middle distance of the scenery. */
 export type SceneryFeature = 'junk' | 'pines' | 'factories' | 'mesas' | 'spires';
 
+/** The far backdrop behind the silhouette (built in src/art/backdrops.ts). */
+export type BackdropKind = 'scrapHills' | 'snowPeaks' | 'skyline' | 'buttes' | 'shardIslands';
+
+/** Something moving in the sky or the far distance. */
+export type AmbientKind = 'crows' | 'birds' | 'smoke' | 'heat' | 'aurora';
+
 /** Objects that pass by beside the road (built in src/art/props.ts). */
 export type PropKind =
   | 'lamp'
@@ -84,7 +90,9 @@ export interface BiomeDef {
   /** Materials found per km driven here, on average. */
   findsPerKm: MaterialAmounts;
   palette: BiomePalette;
+  backdrop: BackdropKind;
   feature: SceneryFeature;
+  ambient: AmbientKind;
   props: BiomeProps;
 }
 
@@ -123,7 +131,9 @@ export const BIOMES: readonly BiomeDef[] = [
       night: 0.5,
       disc: 'sun',
     },
+    backdrop: 'scrapHills',
     feature: 'junk',
+    ambient: 'crows',
     props: {
       roadside: ['wreck', 'tyres', 'pole', 'fence', 'lamp', 'wreck'],
       foreground: ['tyres', 'barrel', 'rock', 'grass', 'grass'],
@@ -163,7 +173,9 @@ export const BIOMES: readonly BiomeDef[] = [
       night: 0.35,
       disc: 'sun',
     },
+    backdrop: 'snowPeaks',
     feature: 'pines',
+    ambient: 'birds',
     props: {
       roadside: ['lamp', 'pine', 'sign', 'pine', 'billboard', 'pine'],
       foreground: ['guardrail', 'grass', 'grass', 'rock'],
@@ -204,7 +216,9 @@ export const BIOMES: readonly BiomeDef[] = [
       night: 0.85,
       disc: 'moon',
     },
+    backdrop: 'skyline',
     feature: 'factories',
+    ambient: 'smoke',
     props: {
       roadside: ['lamp', 'fence', 'billboard', 'barrel', 'lamp', 'pole'],
       foreground: ['barrel', 'cone', 'guardrail', 'rock'],
@@ -244,7 +258,9 @@ export const BIOMES: readonly BiomeDef[] = [
       night: 0.15,
       disc: 'sun',
     },
+    backdrop: 'buttes',
     feature: 'mesas',
+    ambient: 'heat',
     props: {
       roadside: ['cactus', 'rock', 'sign', 'pole', 'cactus'],
       foreground: ['rock', 'cactus', 'grass', 'rock'],
@@ -284,7 +300,9 @@ export const BIOMES: readonly BiomeDef[] = [
       night: 1,
       disc: 'moon',
     },
+    backdrop: 'shardIslands',
     feature: 'spires',
+    ambient: 'aurora',
     props: {
       roadside: ['crystal', 'lamp', 'rock', 'crystal'],
       foreground: ['crystal', 'rock', 'rock'],

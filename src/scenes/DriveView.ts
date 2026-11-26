@@ -1,10 +1,11 @@
 import Phaser from 'phaser';
 import { RUSTBUCKET_LAYOUT } from '../art/carArt';
+import { buildAurora, buildBackdrop, buildBird, buildPuff, buildShimmer, type Backdrop } from '../art/backdrops';
+import { mix } from '../art/color';
 import {
   buildClouds,
   buildFeature,
   buildHaze,
-  buildMountains,
   buildRoad,
   buildSky,
   buildSkyDisc,
@@ -27,6 +28,8 @@ const SCROLL_PER_KMH = 6.5;
 const MAX_SCROLL_SPEED = 1400;
 /** Clouds drift slowly even when the car is parked. */
 const CLOUD_DRIFT = 6;
+/** Seeds for each biome's ambient life, so flocks and smoke differ between biomes. */
+const BIOME_SEEDS: Record<BiomeId, number> = { junkyard: 3, rustHighway: 5, industrial: 7, desert: 11, beyond: 13 };
 /** Milliseconds for the scenery to fade from one biome to the next. */
 const BIOME_FADE_MS = 700;
 
@@ -55,6 +58,8 @@ export interface DriveViewOptions {
 
 interface ScrollLayer {
   images: [Phaser.GameObjects.Image, Phaser.GameObjects.Image];
+  /** Objects riding on each copy of the layer (offset from its left edge). */
+  attached?: { obj: Phaser.GameObjects.Image; dx: number }[][];
   /** 1 = moves with the road, smaller = further away. */
   parallax: number;
   /** Width of one copy of the layer, in screen units. */
@@ -70,6 +75,8 @@ interface Scenery {
   /** Ground in front of the road (pulled-back view only). */
   front: Phaser.GameObjects.Container | null;
   layers: ScrollLayer[];
+  /** Moves the biome's ambient life (birds, smoke, shimmer, aurora) each frame. */
+  ambient: ((dt: number, distance: number, time: number) => void) | null;
 }
 
 interface PlacedProp {
@@ -200,6 +207,7 @@ export class DriveView {
   private biome: BiomeId;
   private scroll = 0;
   private cloudScroll = 0;
+  private time = 0;
 
   constructor(
     private readonly scene: Phaser.Scene,
@@ -331,10 +339,12 @@ export class DriveView {
     const distance = speed * dtSeconds;
     this.scroll += distance;
     this.cloudScroll += CLOUD_DRIFT * dtSeconds;
+    this.time += dtSeconds;
 
     for (const scenery of this.sceneries.values()) {
       if (scenery.back.alpha <= 0) continue;
       for (const layer of scenery.layers) this.positionLayer(layer);
+      scenery.ambient?.(dtSeconds, distance, this.time);
     }
     const glowAlpha = 0.25 + 0.6 * BIOMES_BY_ID[this.biome].palette.night;
     for (const lane of this.lanes) lane.scroll(distance, glowAlpha);
@@ -370,6 +380,15 @@ export class DriveView {
     const offset = (this.scroll * layer.parallax + (layer.drifts ? this.cloudScroll : 0)) % layer.span;
     layer.images[0].x = -offset;
     layer.images[1].x = -offset + layer.span;
+    layer.attached?.forEach((list, copy) => {
+      for (const a of list) a.obj.x = layer.images[copy]!.x + a.dx;
+    });
+  }
+
+  /** Screen x of a point on a scrolling layer, on whichever copy is nearest the screen. */
+  private layerX(layer: ScrollLayer, px: number): number {
+    const x = layer.images[0].x + px * this.scale;
+    return x < -80 ? x + layer.span : x;
   }
 
   /** The scenery for a biome, built (hidden) the first time it's needed. */
@@ -394,7 +413,13 @@ export class DriveView {
     ensureGridTexture(this.scene, key('sky'), () => buildSky(w, roadTop, Math.round(roadTop * 0.55), p, true));
     ensureGridTexture(this.scene, `scenery/${biome}/disc`, () => buildSkyDisc(discRadius, p));
     ensureGridTexture(this.scene, key('clouds'), () => buildClouds(w, Math.round(this.pxHeight * 0.45), 7, p));
-    ensureGridTexture(this.scene, key('mountains'), () => buildMountains(w, roadTop - mountainTop, 11, p));
+    const backdropKey = key(`backdrop-${def.backdrop}`);
+    if (!this.scene.textures.exists(backdropKey)) {
+      const built = buildBackdrop(def.backdrop, w, roadTop - mountainTop, 11, p);
+      ensureGridTexture(this.scene, backdropKey, () => built.grid);
+      this.scene.textures.get(backdropKey).customData = { vents: built.vents, beacons: built.beacons };
+    }
+    const points = this.scene.textures.get(backdropKey).customData as Pick<Backdrop, 'vents' | 'beacons'>;
     ensureGridTexture(this.scene, key('haze'), () => buildHaze(w, hazeBottom - hazeTop, p));
     ensureGridTexture(this.scene, key('feature'), () => buildFeature(def.feature, w, featureHeight, 23, p));
     ensureGridTexture(this.scene, key('near'), () => buildFeature(def.feature, w, nearHeight, 41, nearPalette(p)));
@@ -405,11 +430,24 @@ export class DriveView {
       .setScale(s);
     const haze = this.scene.add.image(0, hazeTop * s, key('haze')).setOrigin(0).setScale(s);
     const clouds = this.makeLayer(key('clouds'), 0, 0.04, true);
-    const mountains = this.makeLayer(key('mountains'), mountainTop * s, 0.08, false);
+    const mountains = this.makeLayer(backdropKey, mountainTop * s, 0.08, false);
+    const ambient = this.buildAmbient(biome, roadTop, mountainTop, featureHeight, mountains, points);
     const feature = this.makeLayer(key('feature'), (roadTop - featureHeight) * s, 0.28, false);
     const near = this.makeLayer(key('near'), (roadTop - nearHeight + 1) * s, 0.48, false);
     const back = this.scene.add
-      .container(0, 0, [sky, disc, ...clouds.images, ...mountains.images, haze, ...feature.images, ...near.images])
+      .container(0, 0, [
+        sky,
+        ...ambient.sky,
+        disc,
+        ...clouds.images,
+        ...ambient.air,
+        ...mountains.images,
+        ...ambient.far,
+        haze,
+        ...ambient.horizon,
+        ...feature.images,
+        ...near.images,
+      ])
       .setDepth(DRIVE_DEPTH.scenery)
       .setAlpha(0);
 
@@ -419,7 +457,7 @@ export class DriveView {
     const road = this.makeLayer(key('road'), roadTop * s, 1, false);
     const roadContainer = this.scene.add.container(0, 0, road.images).setDepth(DRIVE_DEPTH.road).setAlpha(0);
 
-    const layers = [clouds, mountains, feature, near, road];
+    const layers = [clouds, mountains, feature, near, road, ...ambient.layers];
     let front: Phaser.GameObjects.Container | null = null;
     if (this.options.pulledBack) {
       // The verge overlaps the road's bottom edge by a few pixels, so tufts stand in front of it.
@@ -430,10 +468,176 @@ export class DriveView {
       front = this.scene.add.container(0, 0, verge.images).setDepth(DRIVE_DEPTH.verge).setAlpha(0);
     }
 
-    const scenery: Scenery = { back, road: roadContainer, front, layers };
+    const scenery: Scenery = { back, road: roadContainer, front, layers, ambient: ambient.update };
     this.sceneries.set(biome, scenery);
     for (const layer of layers) this.positionLayer(layer);
     return scenery;
+  }
+
+  /**
+   * The biome's ambient life: birds crossing the sky, smoke rising from chimneys, blinking
+   * warning lights, heat shimmer over the horizon or an aurora. Objects are returned by the
+   * place they go in the scenery's draw order.
+   */
+  private buildAmbient(
+    biome: BiomeId,
+    roadTop: number,
+    backdropTop: number,
+    featureHeight: number,
+    backdrop: ScrollLayer,
+    points: Pick<Backdrop, 'vents' | 'beacons'>,
+  ): {
+    sky: Phaser.GameObjects.Image[];
+    air: Phaser.GameObjects.Image[];
+    far: Phaser.GameObjects.Image[];
+    horizon: Phaser.GameObjects.Image[];
+    layers: ScrollLayer[];
+    update: (dt: number, distance: number, time: number) => void;
+  } {
+    const def = BIOMES_BY_ID[biome];
+    const p = def.palette;
+    const s = this.scale;
+    const scene = this.scene;
+    const w = this.pxWidth;
+    const out = {
+      sky: [] as Phaser.GameObjects.Image[],
+      air: [] as Phaser.GameObjects.Image[],
+      far: [] as Phaser.GameObjects.Image[],
+      horizon: [] as Phaser.GameObjects.Image[],
+      layers: [] as ScrollLayer[],
+    };
+    const updates: ((dt: number, distance: number, time: number) => void)[] = [];
+    const rand = seededRandom(BIOME_SEEDS[biome]);
+
+    // Blinking warning lights on cranes, masts and chimneys, riding on the backdrop layer.
+    if (points.beacons.length) {
+      const glow = glowKey(scene, 3, 0xff4d4d);
+      const phases = points.beacons.map(() => rand() * 2);
+      backdrop.attached = backdrop.images.map(() =>
+        points.beacons.map((b) => {
+          const obj = scene.add
+            .image(0, (backdropTop + b.y + 0.5) * s, glow)
+            .setScale(s)
+            .setBlendMode(Phaser.BlendModes.ADD);
+          out.far.push(obj);
+          return { obj, dx: (b.x + 0.5) * s };
+        }),
+      );
+      updates.push((_dt, _d, time) => {
+        backdrop.attached?.forEach((list) =>
+          list.forEach((a, i) => a.obj.setAlpha((time + (phases[i] ?? 0)) % 1.8 < 0.7 ? 0.95 : 0.12)),
+        );
+      });
+    }
+
+    if (def.ambient === 'crows' || def.ambient === 'birds') {
+      const color = def.ambient === 'crows' ? mix(p.featureDark, 0x000000, 0.45) : mix(p.mountainShadow, p.featureDark, 0.6);
+      const keys = [0, 1].map((frame) => {
+        const k = `ambient/bird/${color.toString(16)}/${frame}`;
+        ensureGridTexture(scene, k, () => buildBird(frame, color));
+        return k;
+      });
+      const size = def.ambient === 'crows' ? 4 : 6;
+      // A loose V: each bird trails the leader and sits a little above or below.
+      const birds = Array.from({ length: size }, (_, i) => ({
+        trail: Math.ceil(i / 2) * 9 * s + rand() * 3 * s,
+        side: (i % 2 === 0 ? 1 : -1) * Math.ceil(i / 2) * 3 * s + rand() * 2 * s,
+        phase: rand() * 2,
+        img: scene.add.image(0, 0, keys[0] as string).setScale(s).setVisible(false),
+      }));
+      out.far.push(...birds.map((b) => b.img));
+      const flock = { x: 0, y: 0, dir: 1, cooldown: 1 + rand() * 4, active: false };
+      updates.push((dt, distance, time) => {
+        if (!flock.active) {
+          flock.cooldown -= dt;
+          if (flock.cooldown > 0) return;
+          flock.active = true;
+          flock.dir = rand() < 0.5 ? 1 : -1;
+          flock.x = flock.dir > 0 ? -120 : this.width + 120;
+          flock.y = roadTop * s * (0.12 + rand() * 0.3);
+        }
+        flock.x += flock.dir * 55 * dt - distance * 0.12;
+        for (const b of birds) {
+          const frame = Math.floor(time * 5 + b.phase) % 2;
+          b.img
+            .setVisible(true)
+            .setTexture(keys[frame] as string)
+            .setFlipX(flock.dir < 0)
+            .setPosition(flock.x - flock.dir * b.trail, flock.y + b.side);
+        }
+        if (flock.x < -260 || flock.x > this.width + 260) {
+          flock.active = false;
+          flock.cooldown = 5 + rand() * 10;
+          for (const b of birds) b.img.setVisible(false);
+        }
+      });
+    }
+
+    if (def.ambient === 'smoke' && points.vents.length) {
+      const puffKey = `ambient/puff/${biome}`;
+      ensureGridTexture(scene, puffKey, () => buildPuff(5, mix(p.cloudLight, p.haze, 0.25)));
+      const pool = Array.from({ length: Math.min(60, points.vents.length * 9) }, () => ({
+        img: scene.add.image(0, 0, puffKey).setVisible(false),
+        age: 0,
+        life: 0,
+      }));
+      out.far.push(...pool.map((puff) => puff.img));
+      const timers = points.vents.map(() => rand());
+      let next = 0;
+      updates.push((dt, distance) => {
+        points.vents.forEach((vent, i) => {
+          timers[i] = (timers[i] ?? 0) - dt;
+          if ((timers[i] ?? 0) > 0) return;
+          timers[i] = 0.5 + rand() * 0.5;
+          const x = this.layerX(backdrop, vent.x + 0.5);
+          if (x < -40 || x > this.width + 40) return;
+          const puff = pool[next++ % pool.length];
+          if (!puff) return;
+          puff.age = 0;
+          puff.life = 4 + rand() * 2;
+          puff.img.setVisible(true).setPosition(x, (backdropTop + vent.y) * s);
+        });
+        for (const puff of pool) {
+          if (!puff.img.visible) continue;
+          puff.age += dt;
+          const t = puff.age / puff.life;
+          if (t >= 1) {
+            puff.img.setVisible(false);
+            continue;
+          }
+          puff.img.x -= distance * 0.08 + 7 * dt;
+          puff.img.y -= 13 * dt;
+          puff.img.setScale(s * (0.35 + t * 0.9)).setAlpha(0.75 * (1 - t));
+        }
+      });
+    }
+
+    if (def.ambient === 'heat') {
+      const height = 8;
+      const k = `ambient/shimmer/${biome}/${w}`;
+      ensureGridTexture(scene, k, () => buildShimmer(w, height, 5, p));
+      const layer = this.makeLayer(k, (roadTop - featureHeight - height + 2) * s, 0.2, false);
+      out.horizon.push(...layer.images);
+      out.layers.push(layer);
+      updates.push((_dt, _d, time) => {
+        for (const img of layer.images) img.setAlpha(0.3 + 0.3 * Math.sin(time * 2.1) * Math.sin(time * 0.7 + 1));
+      });
+    }
+
+    if (def.ambient === 'aurora') {
+      const height = Math.round(roadTop * 0.42);
+      const k = `ambient/aurora/${biome}/${w}x${height}`;
+      ensureGridTexture(scene, k, () => buildAurora(w, height, 9, p));
+      const layer = this.makeLayer(k, roadTop * 0.03 * s, 0.01, true);
+      for (const img of layer.images) img.setBlendMode(Phaser.BlendModes.ADD);
+      out.sky.push(...layer.images);
+      out.layers.push(layer);
+      updates.push((_dt, _d, time) => {
+        for (const img of layer.images) img.setAlpha(0.45 + 0.25 * Math.sin(time * 0.6));
+      });
+    }
+
+    return { ...out, update: (dt, distance, time) => updates.forEach((u) => u(dt, distance, time)) };
   }
 
   private makeLayer(textureKey: string, y: number, parallax: number, drifts: boolean): ScrollLayer {

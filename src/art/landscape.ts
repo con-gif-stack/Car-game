@@ -29,10 +29,10 @@ const R = SUNSET_PALETTE;
 /** Lane dash pattern length; road layer widths must be a multiple of this to wrap cleanly. */
 export const LANE_PERIOD = 12;
 
-const wrap = (x: number, w: number) => ((Math.round(x) % w) + w) % w;
+export const wrap = (x: number, w: number) => ((Math.round(x) % w) + w) % w;
 
 /** Smooth, wrapping height noise in [-1, 1] built from whole-period sine waves. */
-function wrappingNoise(w: number, rand: () => number, octaves: readonly number[]): (x: number) => number {
+export function wrappingNoise(w: number, rand: () => number, octaves: readonly number[]): (x: number) => number {
   const waves = octaves.map((k, i) => ({ k, phase: rand() * Math.PI * 2, amp: 1 / (i + 1) }));
   const total = waves.reduce((sum, wave) => sum + wave.amp, 0);
   return (x) =>
@@ -229,7 +229,7 @@ export function buildHaze(w: number, h: number, palette: BiomePalette): PixelGri
  * the left, dark on the right, and darkness gathering towards the base. Pixels of other
  * colours (windows, strata) are left as they are.
  */
-function lightSilhouette(g: PixelGrid, palette: BiomePalette): void {
+export function lightSilhouette(g: PixelGrid, palette: BiomePalette): void {
   const w = g.width;
   const h = g.height;
   const rimTop = mix(palette.featureLight, palette.rim, 0.45);
