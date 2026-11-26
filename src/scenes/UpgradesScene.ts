@@ -11,9 +11,10 @@ import { MATERIAL_IDS } from '../data/materials';
 import { COLORS, TEXT_COLORS, UI_PIXEL } from '../ui/theme';
 import type { AppContext } from './context';
 import { openDroneModelPanel, panelSignature } from './panels';
+import { dismissPanel } from './panel';
 import { overlayStyle, textStyle, wrapStyle } from './textStyles';
 import { ensureGridTexture, materialIconKey, moneyIconKey } from './textures';
-import { addButton, addFrame, glowKey, uiIconKey } from './ui';
+import { addButton, addThemedFrame, glowKey, uiIconKey } from './ui';
 
 const PAD = 32;
 const BOTTOM_PAD = 48;
@@ -98,7 +99,7 @@ export class UpgradesScene extends Phaser.Scene {
     const { farm } = this.ctx.model.state;
     if (farm.droneCount < 1) {
       this.headerDrone = null;
-      add(addFrame(this, PAD, 16, width - 2 * PAD, 260));
+      add(addThemedFrame(this, 'terminal', 'panel', PAD, 16, width - 2 * PAD, 260));
       add(this.add.image(width / 2, 90, uiIconKey(this, 'lock')).setScale(UI_PIXEL));
       add(this.add.text(width / 2, 160, 'No drones yet', textStyle(40, TEXT_COLORS.primary)).setOrigin(0.5));
       add(
@@ -138,7 +139,7 @@ export class UpgradesScene extends Phaser.Scene {
     const rates = farmRates(farm, model.isFull);
     const perHour = MATERIAL_IDS.reduce((sum, id) => sum + rates.materials[id], 0) * 3600;
 
-    add(addFrame(this, PAD, 16, width - 2 * PAD, HEADER_HEIGHT));
+    add(addThemedFrame(this, 'terminal', 'panel', PAD, 16, width - 2 * PAD, HEADER_HEIGHT));
     add(this.add.image(PAD + 110, 16 + HEADER_HEIGHT / 2, glowKey(this, 24, COLORS.accentAlt)).setScale(4).setBlendMode(Phaser.BlendModes.ADD).setAlpha(0.4));
     this.headerDrone = add(this.add.image(PAD + 110, 16 + HEADER_HEIGHT / 2, this.droneKey(farm.droneModel, 0)).setScale(8));
     const left = PAD + 220;
@@ -178,7 +179,7 @@ export class UpgradesScene extends Phaser.Scene {
       const isNext = i === owned + 1;
       const affordable = isNext && nextCost !== null && canAfford(resources, nextCost);
       const edge = isCurrent ? COLORS.accentWarm : i < owned ? COLORS.panelBorder : isNext ? (affordable ? COLORS.good : COLORS.accent) : 0x2a2448;
-      const card = add(addFrame(this, x, top, nodeWidth, nodeHeight, { kind: 'card', color: edge }).setAlpha(i > owned + 1 ? 0.5 : 1));
+      const card = add(addThemedFrame(this, 'terminal', 'card', x, top, nodeWidth, nodeHeight, { color: edge }).setAlpha(i > owned + 1 ? 0.5 : 1));
       add(this.add.image(x + nodeWidth / 2, top + 64, this.droneKey(i, 0)).setScale(5).setAlpha(i > owned ? 0.45 : 1));
       add(
         this.add
@@ -222,7 +223,7 @@ export class UpgradesScene extends Phaser.Scene {
     const affordable = cost !== null && canAfford(resources, cost);
     const color = BRANCH_COLORS[branch.id];
 
-    add(addFrame(this, x, y, w, h, { kind: 'panel', color: affordable ? COLORS.good : color }));
+    add(addThemedFrame(this, 'terminal', 'card', x, y, w, h, { color: affordable ? COLORS.good : color }));
     add(this.add.image(x + 24, y + 26, uiIconKey(this, BRANCH_ICONS[branch.id])).setOrigin(0).setScale(3));
     add(this.add.text(x + 86, y + 26, branch.name, textStyle(32, TEXT_COLORS.primary)));
     add(this.add.text(x + w - 24, y + 32, `${level}/${max}`, textStyle(26, TEXT_COLORS.secondary)).setOrigin(1, 0));
@@ -307,7 +308,7 @@ export class UpgradesScene extends Phaser.Scene {
   }
 
   private closePanel(): void {
-    this.panel?.destroy();
+    dismissPanel(this.panel);
     this.panel = null;
   }
 }

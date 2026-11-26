@@ -10,7 +10,7 @@ import { CAR_MODELS, QUALITIES, SLOTS, STATS } from '../data/vehicles';
 import { COLORS, TEXT_COLORS } from '../ui/theme';
 import type { AppContext } from './context';
 import { DriveView } from './DriveView';
-import { cssColor } from './panel';
+import { cssColor, dismissPanel } from './panel';
 import { openPartPanel, openWorkshopPanel, panelSignature, type WorkshopPage } from './panels';
 import { fontPx, overlayStyle, textStyle, wrapStyle } from './textStyles';
 import { addButton, addDot, addFrame, PixelBar, restyleFrame } from './ui';
@@ -302,7 +302,7 @@ export class GarageScene extends Phaser.Scene {
   }
 
   private closePanel(): void {
-    this.panel?.destroy();
+    dismissPanel(this.panel);
     this.panel = null;
     this.openPanel = null;
   }

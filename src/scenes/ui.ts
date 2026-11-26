@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { buildBarFill, buildFrame, buildGlow, buildRule, type FrameKind } from '../art/uiArt';
+import { buildBarFill, buildFrame, buildGlow, buildRule, buildThemedFrame, type FrameKind, type PanelTheme, type ThemePart } from '../art/uiArt';
 import { buildUiIcon, HUD_ICON_COLORS, UPGRADE_ICON_COLORS, type HudIcon, type UiIcon, type UpgradeIcon } from '../art/uiIcons';
 import { COLORS, TEXT_COLORS, UI_PIXEL } from '../ui/theme';
 import { textStyle } from './textStyles';
@@ -42,6 +42,28 @@ export function addFrame(
   const kind = opts.kind ?? 'panel';
   const color = opts.color ?? COLORS.panelBorder;
   const key = frameKey(scene, kind, toPx(width), toPx(height), color);
+  return scene.add
+    .image(x, y, key)
+    .setOrigin(opts.originX ?? 0, opts.originY ?? 0)
+    .setScale(PX);
+}
+
+/** A frame in one of the menu themes (see `PanelTheme`); 'neon' gives the plain frames. */
+export function addThemedFrame(
+  scene: Phaser.Scene,
+  theme: PanelTheme,
+  part: ThemePart,
+  x: number,
+  y: number,
+  width: number,
+  height: number,
+  opts: { color?: number; originX?: number; originY?: number } = {},
+): Phaser.GameObjects.Image {
+  const color = opts.color ?? COLORS.panelBorder;
+  const wPx = toPx(width);
+  const hPx = toPx(height);
+  const key = `ui/theme/${theme}/${part}/${wPx}x${hPx}/${color.toString(16)}`;
+  ensureGridTexture(scene, key, () => buildThemedFrame(wPx, hPx, theme, part, color));
   return scene.add
     .image(x, y, key)
     .setOrigin(opts.originX ?? 0, opts.originY ?? 0)
@@ -143,16 +165,19 @@ export class PixelButton extends Phaser.GameObjects.Container {
       if (!this.enabled) return;
       this.pressed = true;
       this.redraw();
+      this.squash(true);
     });
     this.background.on('pointerout', () => {
       if (!this.pressed) return;
       this.pressed = false;
       this.redraw();
+      this.squash(false);
     });
     this.background.on('pointerup', () => {
       const wasPressed = this.pressed;
       this.pressed = false;
       this.redraw();
+      if (wasPressed) this.squash(false);
       if (this.enabled && wasPressed) this.opts.onClick();
     });
     this.redraw();
@@ -201,6 +226,19 @@ export class PixelButton extends Phaser.GameObjects.Container {
       this.setScale(1);
     }
     return this;
+  }
+
+  /** Presses in a little while held, and springs back on release (not while pulsing). */
+  private squash(down: boolean): void {
+    if (this.pulseTween || !this.scene) return;
+    this.scene.tweens.killTweensOf(this);
+    this.scene.tweens.add({
+      targets: this,
+      scaleX: down ? 0.96 : 1,
+      scaleY: down ? 0.92 : 1,
+      duration: down ? 60 : 220,
+      ease: down ? 'Quad.easeOut' : 'Back.easeOut',
+    });
   }
 
   private redraw(): void {

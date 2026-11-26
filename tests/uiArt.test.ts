@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { bayer, mix, ramp } from '../src/art/color';
 import { buildProp, PROP_VARIANTS } from '../src/art/props';
-import { buildBarFill, buildDial, buildFrame, buildGlow, frameRing, type FrameKind } from '../src/art/uiArt';
+import { buildBarFill, buildDial, buildFrame, buildGlow, buildThemedFrame, frameRing, type FrameKind } from '../src/art/uiArt';
 import { buildUiIcon, UI_ICON_SIZE, type UiIcon } from '../src/art/uiIcons';
 import { BIOMES, type PropKind } from '../src/data/biomes';
 import type { PixelGrid } from '../src/art/PixelGrid';
@@ -111,5 +111,36 @@ describe('road props', () => {
   it('props are generated the same way every time', () => {
     const palette = BIOMES[1]!.palette;
     expect(same(buildProp('pine', 2, palette, false).grid, buildProp('pine', 2, palette, false).grid)).toBe(true);
+  });
+});
+
+describe('menu themes', () => {
+  const themes = ['neon', 'toolbox', 'blueprint', 'terminal', 'crate'] as const;
+  const parts = ['panel', 'card', 'plate'] as const;
+
+  it('every theme builds every part at full size, outlined, with cut corners', () => {
+    for (const theme of themes) {
+      for (const part of parts) {
+        const g = buildThemedFrame(60, 30, theme, part, 0x3b2f6a);
+        expect(g.width).toBe(60);
+        expect(g.height).toBe(30);
+        expect(g.get(0, 0), `${theme} ${part} corner`).toBeNull();
+        expect(g.get(30, 0), `${theme} ${part} outline`).toBe(0x07050f);
+        expect(g.get(30, 15), `${theme} ${part} body`).not.toBeNull();
+      }
+    }
+  });
+
+  it('themes look different from each other', () => {
+    const body = (theme: (typeof themes)[number]) => buildThemedFrame(60, 30, theme, 'panel', 0x3b2f6a).get(30, 15);
+    expect(new Set(themes.map(body)).size).toBe(themes.length);
+  });
+
+  it('a highlight colour tints a themed card edge', () => {
+    for (const theme of themes) {
+      const plain = buildThemedFrame(40, 20, theme, 'card', 0x3b2f6a).get(20, 1);
+      const good = buildThemedFrame(40, 20, theme, 'card', 0x6fe08a).get(20, 1);
+      expect(good, theme).not.toBe(plain);
+    }
   });
 });

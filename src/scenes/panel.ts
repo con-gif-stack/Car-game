@@ -1,7 +1,10 @@
 import Phaser from 'phaser';
+import { THEME_RULE, type PanelTheme } from '../art/uiArt';
 import { COLORS, TEXT_COLORS, UI_PIXEL } from '../ui/theme';
 import { textStyle } from './textStyles';
-import { addButton, addFrame, addRule, type ButtonTone, type PixelButton } from './ui';
+import { addButton, addRule, addThemedFrame, glowKey, type ButtonTone, type PixelButton } from './ui';
+
+export type { PanelTheme } from '../art/uiArt';
 
 export interface Area {
   x: number;
@@ -19,8 +22,10 @@ export interface PanelOptions {
   align?: 'left' | 'center';
   /** Pop in when opened. Turn off when rebuilding a panel that is already showing. Default true. */
   animate?: boolean;
-  /** Edge colour of the frame. */
+  /** Edge colour of the frame (neon theme). */
   edgeColor?: number;
+  /** The panel's look: an object from the game's world. Default 'neon'. */
+  theme?: PanelTheme;
 }
 
 export interface PanelButtonOptions {
@@ -60,6 +65,9 @@ export class Panel {
   private group = 0;
   private revealTimers: Phaser.Time.TimerEvent[] = [];
   private headerTitle: { text: string; color: number } | null = null;
+  private readonly theme: PanelTheme;
+  /** Objects with looping animations, stopped when the panel closes. */
+  private readonly loopers: Phaser.GameObjects.GameObject[] = [];
 
   constructor(
     private readonly scene: Phaser.Scene,
@@ -79,6 +87,11 @@ export class Panel {
     if (options.onBackdrop) this.backdrop.on('pointerup', options.onBackdrop);
     this.body = scene.add.container(0, 0);
     this.container = scene.add.container(0, 0, [this.backdrop, this.body]).setDepth(1000);
+    this.theme = options.theme ?? 'neon';
+    this.container.once(Phaser.GameObjects.Events.DESTROY, () => {
+      for (const obj of this.loopers) scene.tweens.killTweensOf(obj);
+      for (const timer of this.revealTimers) timer.remove(false);
+    });
   }
 
   /** A title plate sitting on the panel's top edge. */
@@ -151,7 +164,9 @@ export class Panel {
     const top = (height - textHeight) / 2;
 
     if (opts.card) {
-      const card = addFrame(this.scene, this.left, 0, this.innerWidth, height, { kind: 'card', color: opts.cardColor ?? COLORS.panelBorder });
+      const card = addThemedFrame(this.scene, this.theme, 'card', this.left, 0, this.innerWidth, height, {
+        color: opts.cardColor ?? COLORS.panelBorder,
+      });
       this.placeAt(card, 0);
       const onClick = opts.onClick;
       if (onClick) {
@@ -200,7 +215,7 @@ export class Panel {
   /** A dithered divider line. */
   divider(gapAfter = 20): void {
     this.group++;
-    this.placeAt(addRule(this.scene, this.left, 0, this.innerWidth), 6);
+    this.placeAt(addRule(this.scene, this.left, 0, this.innerWidth, THEME_RULE[this.theme]), 6);
     this.cursor += 14 + gapAfter;
   }
 
@@ -211,20 +226,23 @@ export class Panel {
   /** Draws the panel frame and moves everything into place, centred in the area. */
   finish(): Phaser.GameObjects.Container {
     const { area } = this.options;
+    const theme = this.theme;
     const headerSpace = this.headerTitle ? HEADER_HEIGHT / 2 + 8 : 0;
     const panelHeight = PADDING + headerSpace + this.cursor + PADDING - 16;
     const panelY = area.y + Math.max(MARGIN / 2 + headerSpace, (area.height - panelHeight) / 2);
-    const background = addFrame(this.scene, this.panelX, panelY, this.panelWidth, panelHeight, {
-      kind: 'panel',
-      color: this.options.edgeColor ?? COLORS.panelBorder,
+    const background = addThemedFrame(this.scene, theme, 'panel', this.panelX, panelY, this.panelWidth, panelHeight, {
+      color: theme === 'neon' ? (this.options.edgeColor ?? COLORS.panelBorder) : COLORS.panelBorder,
     }).setInteractive(); // Swallows taps so they don't reach the backdrop.
     this.body.add(background);
+    const animate = this.options.animate ?? true;
+    this.addThemeMotion(panelY, panelHeight);
 
+    let plate: Phaser.GameObjects.Image | null = null;
+    let title: Phaser.GameObjects.Text | null = null;
     if (this.headerTitle) {
-      const title = this.scene.add.text(this.centerX, panelY, this.headerTitle.text, textStyle(30, TEXT_COLORS.primary, true)).setOrigin(0.5);
-      const plateWidth = Math.min(this.panelWidth - 80, title.width + 96);
-      const plate = addFrame(this.scene, this.centerX, panelY, plateWidth, HEADER_HEIGHT, {
-        kind: 'plate',
+      title = this.scene.add.text(this.centerX, panelY, this.headerTitle.text, textStyle(30, TEXT_COLORS.primary, true)).setOrigin(0.5);
+      const plateWidth = Math.min(this.panelWidth - 80, title.width + 96 + (theme === 'terminal' ? 24 : 0));
+      plate = addThemedFrame(this.scene, theme, 'plate', this.centerX, panelY, plateWidth, HEADER_HEIGHT, {
         color: this.headerTitle.color,
         originX: 0.5,
         originY: 0.5,
@@ -240,13 +258,126 @@ export class Panel {
       this.body.add(obj);
     }
 
-    if (this.options.animate ?? true) {
+    if (animate) {
       this.backdrop.setAlpha(0);
       this.scene.tweens.add({ targets: this.backdrop, alpha: 1, duration: 160 });
-      this.body.setAlpha(0).setY(36);
-      this.scene.tweens.add({ targets: this.body, alpha: 1, y: 0, duration: 240, ease: 'Back.easeOut' });
+      // The crate drops in and bounces; everything else springs up.
+      const drop = theme === 'crate';
+      this.body.setAlpha(0).setY(drop ? -70 : 36);
+      this.scene.tweens.add({ targets: this.body, alpha: 1, y: 0, duration: drop ? 420 : 240, ease: drop ? 'Bounce.easeOut' : 'Back.easeOut' });
+      // Lines slide in one after another.
+      this.reveal(26, 0, 120);
+      if (plate && title) this.animateHeader(plate, title);
+    } else if (title && theme === 'terminal') {
+      this.blinkCursor(title, this.headerTitle?.text ?? '');
     }
     return this.container;
+  }
+
+  /** The title plate lands with each theme's own move. */
+  private animateHeader(plate: Phaser.GameObjects.Image, title: Phaser.GameObjects.Text): void {
+    const tweens = this.scene.tweens;
+    const parts = [plate, title];
+    switch (this.theme) {
+      case 'blueprint':
+        // Stamped on: big and faint, then slammed down slightly askew.
+        for (const p of parts) {
+          const sx = p.scaleX;
+          const sy = p.scaleY;
+          p.setScale(sx * 1.8, sy * 1.8).setAlpha(0).setAngle(-12);
+          tweens.add({ targets: p, scaleX: sx, scaleY: sy, alpha: 1, angle: -3, delay: 180, duration: 200, ease: 'Quad.easeIn' });
+        }
+        break;
+      case 'toolbox':
+        // A hanging sign swinging into place.
+        for (const p of parts) {
+          p.setAngle(-14);
+          tweens.add({ targets: p, angle: 0, delay: 80, duration: 700, ease: 'Elastic.easeOut', easeParams: [1.2, 0.4] });
+        }
+        break;
+      case 'terminal': {
+        // The title types itself out, then a cursor blinks after it.
+        const text = this.headerTitle?.text ?? '';
+        title.setText('');
+        let shown = 0;
+        const timer = this.scene.time.addEvent({
+          delay: 40,
+          repeat: text.length,
+          startAt: 0,
+          callback: () => {
+            if (!title.active) return;
+            shown++;
+            title.setText(text.slice(0, shown) + '_');
+            if (shown >= text.length) this.blinkCursor(title, text);
+          },
+        });
+        this.container.once(Phaser.GameObjects.Events.DESTROY, () => timer.remove(false));
+        break;
+      }
+      default:
+        for (const p of parts) {
+          const y = p.y;
+          p.setY(y - 40).setAlpha(0);
+          tweens.add({ targets: p, y, alpha: 1, delay: 100, duration: 320, ease: 'Back.easeOut' });
+        }
+    }
+  }
+
+  private blinkCursor(title: Phaser.GameObjects.Text, text: string): void {
+    let on = true;
+    const timer = this.scene.time.addEvent({
+      delay: 450,
+      loop: true,
+      callback: () => {
+        if (!title.active) return;
+        on = !on;
+        title.setText(text + (on ? '_' : ' '));
+      },
+    });
+    title.setText(text + '_');
+    this.container.once(Phaser.GameObjects.Events.DESTROY, () => timer.remove(false));
+  }
+
+  /** Each theme's idle motion: a light glinting along the edge, or a scan band down the screen. */
+  private addThemeMotion(panelY: number, panelHeight: number): void {
+    const scene = this.scene;
+    if (this.theme === 'terminal') {
+      const inset = 6 * UI_PIXEL;
+      const band = scene.add
+        .rectangle(this.panelX + inset, panelY + inset, this.panelWidth - 2 * inset, 10 * UI_PIXEL, 0x3de8ff, 0.07)
+        .setOrigin(0);
+      this.body.add(band);
+      this.loopers.push(band);
+      scene.tweens.add({
+        targets: band,
+        y: panelY + panelHeight - inset - band.height,
+        duration: 2600,
+        repeat: -1,
+        ease: 'Linear',
+      });
+      return;
+    }
+    // A glint sliding along the top edge every few seconds.
+    const color = this.theme === 'toolbox' ? 0xffffff : this.theme === 'blueprint' ? 0xdce8ff : this.theme === 'crate' ? 0xffd090 : COLORS.accentAlt;
+    const glint = scene.add
+      .image(this.panelX, panelY + 2 * UI_PIXEL, glowKey(scene, 12, color))
+      .setScale(UI_PIXEL * 1.2, UI_PIXEL * 0.35)
+      .setBlendMode(Phaser.BlendModes.ADD)
+      .setAlpha(0);
+    this.body.add(glint);
+    this.loopers.push(glint);
+    scene.tweens.add({
+      targets: glint,
+      x: { from: this.panelX + 40, to: this.panelX + this.panelWidth - 40 },
+      alpha: { from: 0, to: 0.7 },
+      duration: 900,
+      yoyo: false,
+      repeat: -1,
+      repeatDelay: 2600,
+      delay: 500,
+      ease: 'Sine.easeInOut',
+      onRepeat: () => glint.setAlpha(0),
+    });
   }
 
   /**
@@ -254,6 +385,9 @@ export class Panel {
    * show at once. Returns the time (ms) when the last line appears.
    */
   reveal(staggerMs: number, fromGroup = 0, startDelayMs = 250): number {
+    // A new reveal replaces any still waiting (finish() starts a quick one by default).
+    for (const timer of this.revealTimers) timer.remove(false);
+    this.revealTimers = [];
     let last = 0;
     for (const { obj, group } of this.placed) {
       if (group < fromGroup) continue;
@@ -296,6 +430,28 @@ export class Panel {
     obj.y = 0;
     this.placed.push({ obj, y: this.cursor + offset, group: this.group });
   }
+}
+
+/**
+ * Closes a panel (or any pop-up container) with a short fade and drop. Its taps stop at once,
+ * so the screen behind works straight away.
+ */
+export function dismissPanel(container: Phaser.GameObjects.Container | null): void {
+  if (!container || !container.active) return;
+  const scene = container.scene;
+  const disable = (obj: Phaser.GameObjects.GameObject) => {
+    obj.disableInteractive();
+    if (obj instanceof Phaser.GameObjects.Container) obj.list.forEach(disable);
+  };
+  disable(container);
+  scene.tweens.add({
+    targets: container,
+    alpha: 0,
+    y: container.y + 28,
+    duration: 140,
+    ease: 'Quad.easeIn',
+    onComplete: () => container.destroy(),
+  });
 }
 
 /** Hex colour number to a CSS colour string. */

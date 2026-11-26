@@ -22,7 +22,7 @@ import { MATERIAL_IDS, MATERIALS_BY_ID, RARITIES } from '../data/materials';
 import { MILESTONES_BY_ID } from '../data/milestones';
 import { COLORS, TEXT_COLORS, UI_PIXEL } from '../ui/theme';
 import type { AppContext } from './context';
-import { cssColor } from './panel';
+import { cssColor, dismissPanel } from './panel';
 import { openDroneBayPanel, openFarmPanel, panelSignature } from './panels';
 import { overlayStyle, textStyle } from './textStyles';
 import { FARM_DEPTH, FarmFx } from './farmFx';
@@ -606,7 +606,7 @@ export class FarmScene extends Phaser.Scene {
   }
 
   private closePanel(): void {
-    this.panel?.destroy();
+    dismissPanel(this.panel);
     this.panel = null;
     this.openPanel = null;
   }

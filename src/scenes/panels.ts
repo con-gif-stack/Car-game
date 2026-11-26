@@ -107,7 +107,7 @@ export function openPartPanel(
   const part = getInstalledPart(car, slot.id);
   const level = car.parts[slot.id]?.level ?? 1;
   const current = part ? partStatsAtLevel(part, level) : {};
-  const panel = new Panel(scene, { area, onBackdrop: onClose, animate });
+  const panel = new Panel(scene, { area, onBackdrop: onClose, animate, theme: 'toolbox' });
 
   panel.header(slot.label.toUpperCase());
   panel.text(part?.name ?? 'Empty slot', 48, TEXT_COLORS.primary, { bold: true, gapAfter: 6 });
@@ -222,7 +222,7 @@ export function openWorkshopPanel(
   if (page !== 'menu') return garageUpgradePage(scene, model, area, onClose, animate, page, navigate);
 
   const { resources, workshop } = model.state;
-  const panel = new Panel(scene, { area, onBackdrop: onClose, animate });
+  const panel = new Panel(scene, { area, onBackdrop: onClose, animate, theme: 'blueprint' });
   panel.header('WORKSHOP');
   panel.text('Upgrade the garage itself. Tap one to see more.', 26, TEXT_COLORS.secondary, { gapAfter: 18 });
   for (const def of GARAGE_UPGRADES) {
@@ -275,7 +275,7 @@ function garageUpgradePage(
   const { resources, workshop } = model.state;
   const def = GARAGE_UPGRADES_BY_ID[id];
   const level = garageLevel(workshop, id);
-  const panel = new Panel(scene, { area, onBackdrop: onClose, animate });
+  const panel = new Panel(scene, { area, onBackdrop: onClose, animate, theme: 'blueprint' });
   panel.header(def.name.toUpperCase());
   panel.row({ icon: uiIconKey(scene, WORKSHOP_ICONS[id]), iconScale: 4, title: `Level ${level}/${def.maxLevel}`, sub: def.description, size: 34, gapAfter: 14 });
   panel.text(garageEffect(id, level), 28, TEXT_COLORS.primary, { gapAfter: 16 });
@@ -359,7 +359,7 @@ function magnetPage(
   const resources = model.state.resources;
   const level = model.state.workshop.salvageMagnetLevel;
   const { maxLevel } = ECONOMY.salvageMagnet;
-  const panel = new Panel(scene, { area, onBackdrop: onClose, animate });
+  const panel = new Panel(scene, { area, onBackdrop: onClose, animate, theme: 'toolbox' });
 
   panel.header('SALVAGE MAGNET');
   panel.row({ icon: uiIconKey(scene, 'magnet'), iconScale: 4, title: `Level ${level}/${maxLevel}`, size: 34, gapAfter: 10 });
@@ -405,7 +405,7 @@ export function openInventoryPanel(
   const { materials } = resources;
   const rates = model.incomeRates().materialsPerSecond;
   const farmed = new Set(DEPOSITS.map((d) => d.material));
-  const panel = new Panel(scene, { area, onBackdrop: onClose, animate });
+  const panel = new Panel(scene, { area, onBackdrop: onClose, animate, theme: 'crate' });
 
   panel.header('MATERIALS');
   panel.text(
@@ -460,7 +460,7 @@ export function openDroneBayPanel(
   const rates = farmRates(farm, model.isFull);
   const perHour = MATERIAL_IDS.reduce((sum, id) => sum + rates.materials[id], 0) * 3600;
   const limit = model.maxDrones();
-  const panel = new Panel(scene, { area, onBackdrop: onClose, animate });
+  const panel = new Panel(scene, { area, onBackdrop: onClose, animate, theme: 'terminal' });
 
   panel.header('DRONE BAY');
   panel.text(`${farm.droneCount} × ${current?.name ?? ''}`, 48, TEXT_COLORS.primary, { bold: true, gapAfter: 6 });
@@ -503,7 +503,7 @@ export function openDroneModelPanel(
   const resources = model.state.resources;
   const farm = model.state.farm;
   const current = DRONE_MODELS[farm.droneModel] ?? DRONE_MODELS[0];
-  const panel = new Panel(scene, { area, onBackdrop: onClose, animate });
+  const panel = new Panel(scene, { area, onBackdrop: onClose, animate, theme: 'terminal' });
   panel.header('DRONE MODEL');
   panel.text(`Now: ${current?.name ?? ''}`, 30, TEXT_COLORS.secondary, { gapAfter: 12 });
   const next = DRONE_MODELS[farm.droneModel + 1];
@@ -548,7 +548,7 @@ export function openFarmPanel(
   const total = farm.droneCount;
   const maxFarms = model.maxFarmsAtOnce();
   const active = activeFarms(farm);
-  const panel = new Panel(scene, { area, onBackdrop: onClose, animate });
+  const panel = new Panel(scene, { area, onBackdrop: onClose, animate, theme: 'blueprint' });
 
   panel.header(def.name.toUpperCase(), COLORS.accentWarm);
   panel.text(def.description, 26, TEXT_COLORS.secondary, { gapAfter: 12 });

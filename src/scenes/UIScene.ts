@@ -11,7 +11,7 @@ import { MATERIALS, RARITIES } from '../data/materials';
 import { TABS, type TabDef } from '../ui/tabs';
 import { COLORS, TEXT_COLORS, UI_PIXEL } from '../ui/theme';
 import type { AppContext } from './context';
-import { cssColor, Panel } from './panel';
+import { cssColor, dismissPanel, Panel } from './panel';
 import { openInventoryPanel } from './panels';
 import { overlayStyle, textStyle, wrapStyle } from './textStyles';
 import { materialIconKey, moneyIconKey } from './textures';
@@ -45,6 +45,14 @@ export class UIScene extends Phaser.Scene {
   private activeTab: TabDef | null = null;
   private readonly tabButtons: TabButton[] = [];
   private moneyText!: Phaser.GameObjects.Text;
+  private moneyIcon!: Phaser.GameObjects.Image;
+  /** Money as shown: counts up towards the real amount after a big jump. */
+  private shownMoney = 0;
+  private lastMoney = 0;
+  private moneyPopAt = 0;
+  /** The highlight that slides to the active tab, and its glow. */
+  private tabSelector: Phaser.GameObjects.Image | null = null;
+  private tabGlow: Phaser.GameObjects.Image | null = null;
   /** Icons of the materials held, in the Materials button. */
   private materialIcons: Phaser.GameObjects.Image[] = [];
   private materialIconsSignature = '';
@@ -137,7 +145,7 @@ export class UIScene extends Phaser.Scene {
 
   private collectOffline(): void {
     this.ctx.model.collectOffline();
-    this.welcomeDialog?.destroy();
+    dismissPanel(this.welcomeDialog);
     this.welcomeDialog = null;
     this.tweens.add({ targets: this.moneyText, scale: 1.3, duration: 140, yoyo: true, ease: 'Quad.easeOut' });
   }
@@ -150,13 +158,28 @@ export class UIScene extends Phaser.Scene {
   }
 
   private closeInventory(): void {
-    this.inventory?.destroy();
+    dismissPanel(this.inventory);
     this.inventory = null;
   }
 
   update(): void {
     const { resources } = this.ctx.model.state;
-    const money = formatNumber(resources.money);
+    const dt = this.game.loop.delta / 1000;
+    const target = resources.money;
+    // Big jumps (run rewards, collecting) count up; small hauls just tick over.
+    if (target > this.shownMoney && target - this.shownMoney > Math.max(50, target * 0.02)) {
+      this.shownMoney += (target - this.shownMoney) * Math.min(1, dt * 6);
+    } else {
+      this.shownMoney = target;
+    }
+    if (target > this.lastMoney + 1e-6 && this.time.now - this.moneyPopAt > 350) {
+      this.moneyPopAt = this.time.now;
+      this.tweens.killTweensOf(this.moneyIcon);
+      this.moneyIcon.setScale(6.2);
+      this.tweens.add({ targets: this.moneyIcon, scale: 5, angle: { from: -12, to: 0 }, duration: 260, ease: 'Back.easeOut' });
+    }
+    this.lastMoney = target;
+    const money = formatNumber(this.shownMoney);
     if (this.moneyText.text !== money) this.moneyText.setText(money);
     this.updateMaterialIcons();
     this.updateDebugOverlay();
@@ -258,9 +281,14 @@ export class UIScene extends Phaser.Scene {
   showTab(tab: TabDef): void {
     if (this.activeTab?.id === tab.id) return;
     if (this.activeTab) this.scene.sleep(this.activeTab.sceneKey);
+    // The new screen fades in from the dark.
+    const target = this.scene.get(tab.sceneKey);
+    const fade = () => target.cameras.main.fadeIn(180, 10, 8, 24);
     if (this.scene.isSleeping(tab.sceneKey)) {
       this.scene.wake(tab.sceneKey);
+      fade();
     } else {
+      target.events.once(Phaser.Scenes.Events.CREATE, fade);
       this.scene.launch(tab.sceneKey);
     }
     // Keep this layer drawn above the tab screens.
@@ -286,7 +314,8 @@ export class UIScene extends Phaser.Scene {
     // Money.
     const moneyX = hud.x + margin;
     addFrame(this, moneyX, chipY, moneyWidth, chipHeight, { kind: 'inset', color: COLORS.money });
-    this.add.image(moneyX + 22, midY, moneyIconKey(this)).setOrigin(0, 0.5).setScale(5);
+    this.moneyIcon = this.add.image(moneyX + 22 + 30, midY, moneyIconKey(this)).setOrigin(0.5).setScale(5);
+    this.shownMoney = this.lastMoney = this.ctx.model.state.resources.money;
     this.moneyText = this.add.text(moneyX + 100, midY + 8, '0', overlayStyle(46, TEXT_COLORS.primary, true)).setOrigin(0, 1);
     this.add.text(moneyX + 100, midY + 8, 'Money', textStyle(22, TEXT_COLORS.secondary)).setOrigin(0, 0);
 
@@ -337,31 +366,57 @@ export class UIScene extends Phaser.Scene {
       }).setInteractive({ useHandCursor: true });
       plate.on('pointerup', () => this.showTab(tab));
 
+      plate.setDepth(1);
       const glow = this.add
         .image(centerX, tabBar.y + 76, glowKey(this, 24, COLORS.accentWarm))
         .setScale(4.5, 3)
         .setBlendMode(Phaser.BlendModes.ADD)
-        .setAlpha(0.35);
-      const icon = this.add.image(centerX, tabBar.y + 74, uiIconKey(this, tab.id, TAB_ICON_IDLE)).setScale(UI_PIXEL);
-      const label = this.add.text(centerX, tabBar.y + 138, tab.label, textStyle(26, TEXT_COLORS.secondary, true)).setOrigin(0.5);
-      const dot = addDot(this, x + buttonWidth - 30, tabBar.y + 38).setVisible(false);
+        .setAlpha(0)
+        .setVisible(false);
+      const icon = this.add.image(centerX, tabBar.y + 74, uiIconKey(this, tab.id, TAB_ICON_IDLE)).setScale(UI_PIXEL).setDepth(4);
+      const label = this.add.text(centerX, tabBar.y + 138, tab.label, textStyle(26, TEXT_COLORS.secondary, true)).setOrigin(0.5).setDepth(4);
+      const dot = addDot(this, x + buttonWidth - 30, tabBar.y + 38).setVisible(false).setDepth(5);
       this.tweens.add({ targets: dot, scale: UI_PIXEL * 1.25, duration: 500, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
       this.tabButtons.push({ tab, plate, glow, icon, label, dot });
+      if (i === 0) {
+        // One highlight for the whole bar, sliding to whichever tab is active.
+        this.tabSelector = addFrame(this, x + 4, tabBar.y + 14, buttonWidth - 8, tabBar.height - 30, {
+          kind: 'card',
+          color: COLORS.accentWarm,
+        }).setDepth(2);
+        this.tabGlow = this.add
+          .image(centerX, tabBar.y + 76, glowKey(this, 24, COLORS.accentWarm))
+          .setScale(4.5, 3)
+          .setBlendMode(Phaser.BlendModes.ADD)
+          .setAlpha(0.35)
+          .setDepth(3);
+        this.tweens.add({ targets: this.tabGlow, alpha: 0.5, duration: 900, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+      }
     });
   }
 
   private refreshTabButtons(): void {
     for (const button of this.tabButtons) {
       const active = button.tab.id === this.activeTab?.id;
-      restyleFrame(button.plate, 'card', active ? COLORS.accentWarm : COLORS.panelBorder);
-      button.plate.setAlpha(active ? 1 : 0.55);
-      button.glow.setVisible(active);
+      button.plate.setAlpha(0.55);
       button.label.setColor(active ? TEXT_COLORS.primary : TEXT_COLORS.secondary);
       button.icon.setTexture(uiIconKey(this, button.tab.id, active ? TAB_ICON_ACTIVE : TAB_ICON_IDLE));
+      this.tweens.killTweensOf(button.icon);
+      const restY = this.ctx.layout.tabBar.y + 74;
+      button.icon.setY(restY);
       if (active) {
-        this.tweens.killTweensOf(button.icon);
-        button.icon.setScale(UI_PIXEL * 0.8);
-        this.tweens.add({ targets: button.icon, scale: UI_PIXEL, duration: 220, ease: 'Back.easeOut' });
+        // The highlight slides over; the icon pops and then bobs gently.
+        const targetX = button.plate.x;
+        if (this.tabSelector) {
+          this.tweens.killTweensOf(this.tabSelector);
+          this.tweens.add({ targets: this.tabSelector, x: targetX, duration: 280, ease: 'Back.easeOut' });
+        }
+        if (this.tabGlow) this.tweens.add({ targets: this.tabGlow, x: button.icon.x, duration: 280, ease: 'Back.easeOut' });
+        button.icon.setScale(UI_PIXEL * 0.7);
+        this.tweens.add({ targets: button.icon, scale: UI_PIXEL * 1.1, y: restY - 10, duration: 220, ease: 'Back.easeOut' });
+        this.tweens.add({ targets: button.icon, y: restY - 4, delay: 260, duration: 900, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
+      } else {
+        button.icon.setScale(UI_PIXEL);
       }
     }
   }
