@@ -1,5 +1,5 @@
 import { formatPrecise } from '../core/format';
-import { branchLevel, DEPOSITS, farmRates, haulValue, inReach, scavenge } from '../core/farm';
+import { branchLevel, farmDeposits, farmRates, haulValue, inReach, isFarmUnlocked, localLevel, scavenge } from '../core/farm';
 import {
   fitToStorage,
   fuelLimits,
@@ -23,12 +23,14 @@ import {
   buyNextTier,
   buyDrone,
   buyDroneModel,
+  buyLocalUpgrade,
   canAfford,
   costMaterials,
   droneBranchCost,
   droneBuildCost,
   droneModelCost,
   levelUpCost,
+  localUpgradeCost,
   nextTierPart,
   salvageMagnetCost,
   spend,
@@ -37,8 +39,8 @@ import {
 import { carProgress, computeCarStats, getActiveCar, getPart, type CarState, type QualityId } from '../core/vehicle';
 import { BIOMES } from '../data/biomes';
 import { ECONOMY, type Cost } from '../data/economy';
-import { MATERIAL_IDS, MATERIALS, type MaterialId } from '../data/materials';
-import { DRONE_BRANCHES, DRONE_MODELS } from '../data/farm';
+import { MATERIAL_IDS, MATERIALS, RARITIES, type MaterialId } from '../data/materials';
+import { DRONE_BRANCHES, DRONE_MODELS, FARM_IDS, FARMS, type FarmId } from '../data/farm';
 import { GARAGE_UPGRADES, type GarageUpgradeId } from '../data/garage';
 import { QUALITIES, SLOTS, TIER_ORDER } from '../data/vehicles';
 
@@ -65,7 +67,7 @@ export const PROFILES: readonly PlayerProfile[] = [
 
 export interface Purchase {
   day: number;
-  kind: 'tier' | 'level' | 'magnet' | 'drone' | 'tree' | 'garage';
+  kind: 'tier' | 'level' | 'magnet' | 'drone' | 'tree' | 'garage' | 'local';
   label: string;
 }
 
@@ -97,6 +99,8 @@ export interface SimResult {
 }
 
 const DAY = 86_400;
+
+const RARITY_RANK = Object.fromEntries(MATERIALS.map((m) => [m.id, RARITIES[m.rarity].rank])) as Record<MaterialId, number>;
 
 interface Option {
   kind: Purchase['kind'];
@@ -147,8 +151,11 @@ export function simulate(profile: PlayerProfile, maxDays = 180): SimResult {
   /** Scavenging by hand: a few taps on the deposits at each check-in (the first unlocks drones). */
   const tapDeposits = () => {
     const taps = profile.tapsPerCheckIn ?? 25;
+    // Hand scavenging happens on the farm with the most drones (the one the player looks at).
+    const home = FARM_IDS.reduce((best, id) => ((state.farm.crews[id] ?? 0) > (state.farm.crews[best] ?? 0) ? id : best), 'junkyard' as FarmId);
+    const deposits = farmDeposits(home);
     for (let i = 0; i < taps; i++) {
-      const deposit = DEPOSITS[i % DEPOSITS.length];
+      const deposit = deposits[i % deposits.length];
       if (!deposit || !inReach(state.farm, deposit) || full(deposit.material)) continue;
       const haul = scavenge(state.farm, deposit.id);
       if (!haul) continue;
@@ -255,6 +262,17 @@ export function simulate(profile: PlayerProfile, maxDays = 180): SimResult {
         buy: () => spend(resources, magnetCost) && (workshop.salvageMagnetLevel += 1) > 0,
       });
     }
+    for (const def of FARMS) {
+      if (!def.local || !isFarmUnlocked(state.unlockedBiomes, def.id) || (state.farm.crews[def.id] ?? 0) <= 0) continue;
+      const cost = localUpgradeCost(state.farm, def.id);
+      if (!cost) continue;
+      list.push({
+        kind: 'local',
+        label: `${def.local.name} ${localLevel(state.farm, def.id) + 1}`,
+        cost,
+        buy: () => buyLocalUpgrade(state.farm, def.id, resources),
+      });
+    }
     for (const upgrade of GARAGE_UPGRADES) {
       const cost = garageUpgradeCost(workshop, upgrade.id);
       if (!cost) continue;
@@ -288,6 +306,35 @@ export function simulate(profile: PlayerProfile, maxDays = 180): SimResult {
       return MATERIAL_IDS.some((m) => (need[m] ?? 0) > storageCap(workshop, m) || full(m));
     }
     return false;
+  };
+
+  /**
+   * Stations the drones: scores each unlocked farm by what all the drones would earn there
+   * (money, plus a lot for materials the next purchases are short of) and splits them evenly
+   * between the best farms the Relay Masts allow.
+   */
+  const station = () => {
+    const farm = state.farm;
+    if (farm.droneCount < 1) return;
+    const need = neededBy(options());
+    const value = [20, 60, 4_000, 8_000, 16_000];
+    const zero = Object.fromEntries(FARM_IDS.map((id) => [id, 0])) as Record<FarmId, number>;
+    const score = (id: FarmId) => {
+      const rates = farmRates({ ...farm, crews: { ...zero, [id]: farm.droneCount } }, full);
+      let total = rates.money;
+      for (const m of MATERIAL_IDS) {
+        if ((need[m] ?? 0) > resources.materials[m]) total += rates.materials[m] * (value[RARITY_RANK[m]] ?? 0);
+      }
+      return total;
+    };
+    const ranked = FARM_IDS.filter((id) => isFarmUnlocked(state.unlockedBiomes, id))
+      .map((id) => ({ id, score: score(id) }))
+      .sort((a, b) => b.score - a.score);
+    const chosen = ranked.slice(0, Math.min(ranked.length, 1 + garageLevel(workshop, 'relayMasts'), farm.droneCount));
+    farm.crews = { ...zero };
+    chosen.forEach((c, i) => {
+      farm.crews[c.id] = Math.floor(farm.droneCount / chosen.length) + (i < farm.droneCount % chosen.length ? 1 : 0);
+    });
   };
 
   /** Runs the refinery on whatever the next purchases lack most, rarest first. */
@@ -345,6 +392,7 @@ export function simulate(profile: PlayerProfile, maxDays = 180): SimResult {
     driveRuns();
     shop();
     pickRecipe();
+    station();
     driveRuns();
     checkMilestones(state);
     recordMilestones();
@@ -419,18 +467,18 @@ export function formatReport(result: SimResult): string {
   for (const purchase of result.purchases.filter((x) => x.kind === 'tier')) {
     lines.push(`  ${fmtDay(purchase.day).padEnd(10)} ${purchase.label}`);
   }
-  const counts = { level: 0, magnet: 0, drone: 0, tree: 0, garage: 0 };
+  const counts = { level: 0, magnet: 0, drone: 0, tree: 0, garage: 0, local: 0 };
   for (const purchase of result.purchases) if (purchase.kind !== 'tier') counts[purchase.kind] += 1;
   lines.push(
     `  (plus ${counts.level} part levels, ${counts.magnet} Salvage Magnet levels, ${counts.drone} drones and models, ` +
-      `${counts.tree} drone-tree levels and ${counts.garage} garage upgrades)`,
+      `${counts.tree} drone-tree levels, ${counts.garage} garage upgrades and ${counts.local} farm upgrades)`,
   );
   lines.push('Drones, models and Range:');
   for (const purchase of result.purchases.filter((x) => x.kind === 'drone' || (x.kind === 'tree' && x.label.startsWith('Range')))) {
     lines.push(`  ${fmtDay(purchase.day).padEnd(10)} ${purchase.label}`);
   }
-  lines.push('Garage upgrades:');
-  for (const purchase of result.purchases.filter((x) => x.kind === 'garage')) {
+  lines.push('Garage and farm upgrades:');
+  for (const purchase of result.purchases.filter((x) => x.kind === 'garage' || x.kind === 'local')) {
     lines.push(`  ${fmtDay(purchase.day).padEnd(10)} ${purchase.label}`);
   }
   const tree = result.purchases.filter((x) => x.kind === 'tree' && !x.label.startsWith('Range'));

@@ -14,7 +14,7 @@ export type MilestoneCondition =
   | { kind: 'scavenged'; count: number };
 
 export interface MilestoneReward {
-  /** A biome that becomes available to farm (from Step 8). */
+  /** A biome whose farm this unlocks. */
   unlockBiome?: BiomeId;
   /** A feature that switches on, e.g. 'drones' (Step 6). */
   unlockFeature?: string;

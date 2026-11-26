@@ -3,11 +3,25 @@ import { GAME_CONFIG } from '../data/gameConfig';
 import { MATERIAL_IDS } from '../data/materials';
 import { FixedStepClock } from './clock';
 import { Emitter } from './events';
-import type { DroneBranchId } from '../data/farm';
+import type { DroneBranchId, FarmId } from '../data/farm';
 import type { GarageUpgradeId } from '../data/garage';
 import type { MaterialId } from '../data/materials';
-import { depositDef, FarmSim, farmRates, haulValue, regrowDeposits, scavenge as scavengeDeposit, type FullCheck, type Haul } from './farm';
-import { fitToStorage, fuelLimits, isFull, maxDrones, refineryRecipe, stepRefinery, storeMaterials } from './garage';
+import {
+  depositDef,
+  farmOf,
+  FarmSim,
+  farmRates,
+  haulValue,
+  isFarmUnlocked,
+  moveAllDrones,
+  moveDroneFrom,
+  moveDroneTo,
+  regrowDeposits,
+  scavenge as scavengeDeposit,
+  type FullCheck,
+  type Haul,
+} from './farm';
+import { fitToStorage, fuelLimits, garageLevel, isFull, maxDrones, refineryRecipe, stepRefinery, storeMaterials } from './garage';
 import { combineRates, computeOfflineEarnings, trickleRates, type IncomeRates } from './idle';
 import type { SaveManager } from './save';
 import { emptyPendingOffline, type Earnings, type GameState, type PendingOffline } from './state';
@@ -19,6 +33,7 @@ import {
   buyDroneBranch,
   buyDroneModel,
   buyGarageUpgrade,
+  buyLocalUpgrade,
   buyLevelUp,
   buyNextTier,
   salvageMagnetCost,
@@ -26,7 +41,7 @@ import {
 } from './upgrades';
 import { carProgress, computeCarStats, getActiveCar, type CarState, type SlotId } from './vehicle';
 
-export type PurchaseKind = 'tier' | 'level' | 'salvageMagnet' | 'drone' | 'droneModel' | 'droneBranch' | 'garage';
+export type PurchaseKind = 'tier' | 'level' | 'salvageMagnet' | 'drone' | 'droneModel' | 'droneBranch' | 'garage' | 'farmLocal';
 
 export type GameEvents = {
   /** One fixed simulation step has run. */
@@ -47,6 +62,8 @@ export type GameEvents = {
   milestoneReached: [milestone: MilestoneDef];
   /** Drones unloaded a haul at the garage. */
   hauled: [haul: Haul];
+  /** Drones were moved between farms. */
+  crewsChanged: [];
 };
 
 /** What a finished run achieved. */
@@ -104,6 +121,46 @@ export class GameModel {
     return maxDrones(this.state.workshop);
   }
 
+  /** How many farms the drones can work at once (Relay Masts add more). */
+  maxFarmsAtOnce(): number {
+    return 1 + garageLevel(this.state.workshop, 'relayMasts');
+  }
+
+  isFarmUnlocked(id: FarmId): boolean {
+    return isFarmUnlocked(this.state.unlockedBiomes, id);
+  }
+
+  /** Sends every drone to one farm. Returns false for a farm not unlocked yet. */
+  moveAllDrones(to: FarmId): boolean {
+    if (!this.isFarmUnlocked(to)) return false;
+    moveAllDrones(this.state.farm, to);
+    return this.afterCrewChange();
+  }
+
+  /** Moves one more drone to a farm (with Relay Masts). Returns false if not possible. */
+  moveDroneTo(to: FarmId): boolean {
+    if (!this.isFarmUnlocked(to) || !moveDroneTo(this.state.farm, to, this.maxFarmsAtOnce())) return false;
+    return this.afterCrewChange();
+  }
+
+  /** Moves one drone away from a farm to the biggest other crew. Returns false if not possible. */
+  moveDroneFrom(from: FarmId): boolean {
+    if (!moveDroneFrom(this.state.farm, from)) return false;
+    return this.afterCrewChange();
+  }
+
+  /** Buys the next level of a farm's own upgrade. Returns false if not possible. */
+  buyLocalUpgrade(id: FarmId): boolean {
+    const ok = this.isFarmUnlocked(id) && buyLocalUpgrade(this.state.farm, id, this.state.resources);
+    return this.afterPurchase(ok, 'farmLocal', null);
+  }
+
+  private afterCrewChange(): boolean {
+    this.save();
+    this.events.emit('crewsChanged');
+    return true;
+  }
+
   /** Average idle income right now: drone hauls plus the rare-material trickle. */
   incomeRates(): IncomeRates {
     const farm = farmRates(this.state.farm, this.isFull);
@@ -117,7 +174,7 @@ export class GameModel {
   /** Scavenges a deposit by hand. Returns what was found, or null if the deposit is bare. */
   scavenge(depositId: string): Haul | null {
     const deposit = depositDef(depositId);
-    if (!deposit || this.isFull(deposit.material)) return null;
+    if (!deposit || !this.isFarmUnlocked(farmOf(deposit)) || this.isFull(deposit.material)) return null;
     const haul = scavengeDeposit(this.state.farm, depositId);
     if (!haul) return null;
     this.addEarnings(haul);

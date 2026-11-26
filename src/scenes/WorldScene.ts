@@ -2,6 +2,7 @@ import Phaser from 'phaser';
 import { formatDistance } from '../core/format';
 import { milestoneProgress } from '../core/milestones';
 import { BIOMES, type BiomeDef } from '../data/biomes';
+import { FARMS } from '../data/farm';
 import { MATERIAL_IDS, type MaterialId } from '../data/materials';
 import { MILESTONES } from '../data/milestones';
 import { COLORS, TEXT_COLORS } from '../ui/theme';
@@ -159,16 +160,16 @@ export class WorldScene extends Phaser.Scene {
 
     const status = here
       ? '> Your best run got this far'
-      : unlocked
-        ? 'Unlocked'
-        : reached
+      : unlocked && FARMS.some((f) => f.biome === biome.id)
+        ? 'Farm unlocked: visit it on the Farm tab'
+        : unlocked || reached
           ? 'Reached · more to discover soon'
           : `Locked · reach ${formatDistance(biome.startKm)}`;
     objs.push(
       this.add.text(left, y + CARD_HEIGHT - 52, status, textStyle(22, here ? TEXT_COLORS.warm : unlocked ? GREEN : TEXT_COLORS.muted, true)),
     );
 
-    // Materials found here (on runs now; on its farm from Step 8).
+    // Materials found here on runs.
     const found = MATERIAL_IDS.filter((id: MaterialId) => (biome.findsPerKm[id] ?? 0) > 0);
     found.forEach((id, i) => {
       objs.push(

@@ -1,7 +1,7 @@
 import Phaser from 'phaser';
 import { buildDrone } from '../art/farmArt';
 import type { UiIcon } from '../art/uiIcons';
-import { branchLevel, branchMaxLevel, branchMultiplier, branchTotalLevels, DEPOSITS, farmRates } from '../core/farm';
+import { branchLevel, branchMaxLevel, branchMultiplier, branchTotalLevels, DEPOSITS, farmOf, farmRates } from '../core/farm';
 import { formatNumber, formatPrecise } from '../core/format';
 import type { PurchaseKind } from '../core/GameModel';
 import { canAfford, costMaterials, droneBranchCost, droneModelCost } from '../core/upgrades';
@@ -272,7 +272,8 @@ export class UpgradesScene extends Phaser.Scene {
       case 'drills':
         return `Mining +${pct}% · piles regrow +${Math.round(pct * (2 / 3))}%`;
       case 'range': {
-        const far = DEPOSITS.filter((d) => d.range > 0 && d.range <= level).length;
+        // Counted on the farms unlocked so far.
+        const far = DEPOSITS.filter((d) => d.range > 0 && d.range <= level && this.ctx.model.isFarmUnlocked(farmOf(d))).length;
         return far === 0 ? 'Only the piles near the garage' : `Reaches ${far} far pile${far === 1 ? '' : 's'}`;
       }
     }

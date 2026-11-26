@@ -9,7 +9,7 @@ import { createStarterGarage, type GarageState } from './vehicle';
  * The save-file version. Bump it whenever the shape of GameState changes in a way that
  * needs converting old saves, and add a migration in save.ts.
  */
-export const SAVE_VERSION = 6;
+export const SAVE_VERSION = 7;
 
 export type MaterialStock = Record<MaterialId, number>;
 
@@ -71,6 +71,7 @@ export interface WorkshopState {
   warehouse: number;
   fuelDepot: number;
   refinery: number;
+  relayMasts: number;
   /** Id of the refinery recipe running ('' = none). */
   refineryRecipe: string;
   /** Batches done so far towards the next one (0–1). */
@@ -78,7 +79,16 @@ export interface WorkshopState {
 }
 
 export function createWorkshopState(): WorkshopState {
-  return { salvageMagnetLevel: 0, droneBays: 0, warehouse: 0, fuelDepot: 0, refinery: 0, refineryRecipe: '', refineryProgress: 0 };
+  return {
+    salvageMagnetLevel: 0,
+    droneBays: 0,
+    warehouse: 0,
+    fuelDepot: 0,
+    refinery: 0,
+    relayMasts: 0,
+    refineryRecipe: '',
+    refineryProgress: 0,
+  };
 }
 
 /** Earnings (money and materials) over some period. */

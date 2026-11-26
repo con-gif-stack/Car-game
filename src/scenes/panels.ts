@@ -3,7 +3,7 @@ import { formatDuration, formatNumber, formatPrecise } from '../core/format';
 import type { GameModel } from '../core/GameModel';
 import { salvageMagnetMultiplier } from '../core/idle';
 import type { Resources } from '../core/state';
-import { DEPOSITS, farmRates } from '../core/farm';
+import { activeFarms, crewsOf, DEPOSITS, farmRates, localLevel, localRegrowth } from '../core/farm';
 import {
   batchSeconds,
   capacityAt,
@@ -20,13 +20,14 @@ import {
   droneBuildCost,
   droneModelCost,
   levelUpCost,
+  localUpgradeCost,
   nextTierPart,
   salvageMagnetCost,
   tierCost,
 } from '../core/upgrades';
 import { getInstalledPart, partStatsAtLevel, type SlotDef, type StatBlock } from '../core/vehicle';
 import { ECONOMY, PART_LEVELS, type Cost } from '../data/economy';
-import { DRONE_MODELS, DRONES } from '../data/farm';
+import { DRONE_MODELS, DRONES, FARMS_BY_ID, type FarmId } from '../data/farm';
 import { DRONE_BAYS, FUEL_DEPOT_LEVELS, GARAGE_UPGRADES, GARAGE_UPGRADES_BY_ID, REFINERY, type GarageUpgradeId } from '../data/garage';
 import { MATERIAL_IDS, MATERIALS, MATERIALS_BY_ID, RARITIES, type MaterialId } from '../data/materials';
 import type { UiIcon } from '../art/uiIcons';
@@ -89,7 +90,7 @@ export function panelSignature(model: GameModel): string {
   // The refinery's countdown changes every second; round it so panels don't redraw constantly.
   const { refineryProgress, ...levels } = workshop;
   const refinery = Math.floor(refineryProgress * 20);
-  return `${formatNumber(resources.money)}|${owned}|${JSON.stringify(model.activeCar.parts)}|${JSON.stringify(levels)}|${refinery}|${farm.droneCount}|${farm.droneModel}|${JSON.stringify(farm.branches)}`;
+  return `${formatNumber(resources.money)}|${owned}|${JSON.stringify(model.activeCar.parts)}|${JSON.stringify(levels)}|${refinery}|${farm.droneCount}|${farm.droneModel}|${JSON.stringify(farm.branches)}|${JSON.stringify(farm.crews)}|${JSON.stringify(farm.local)}|${model.state.unlockedBiomes.length}`;
 }
 
 /** Details of the part in a slot, with buttons to level it up or install the next tier. */
@@ -170,6 +171,7 @@ const WORKSHOP_ICONS: Record<GarageUpgradeId | 'magnet', UiIcon> = {
   warehouse: 'warehouse',
   fuelDepot: 'fuel',
   refinery: 'refinery',
+  relayMasts: 'range',
   magnet: 'magnet',
 };
 
@@ -183,6 +185,10 @@ function garageEffect(id: GarageUpgradeId, level: number): string {
     case 'fuelDepot': {
       const depot = FUEL_DEPOT_LEVELS[level] ?? FUEL_DEPOT_LEVELS[0];
       return `${depot?.maxTanks ?? 3} fuel tanks, one refill every ${depot?.refillMinutes ?? 40} min`;
+    }
+    case 'relayMasts': {
+      const farms = 1 + level;
+      return farms === 1 ? 'All drones work one farm at a time' : `Drones can work ${farms} farms at once`;
     }
     case 'refinery': {
       if (level === 0) return 'Not built yet';
@@ -520,6 +526,86 @@ export function openDroneModelPanel(
     });
   } else {
     panel.text('Your drones are the best there are, for now.', 28, TEXT_COLORS.muted, { gapAfter: 16 });
+  }
+  panel.gap(4);
+  panel.button('Close', { onClick: onClose, tone: 'neutral', height: 80 });
+  return panel.finish();
+}
+
+/** A farm: where the drones are, the farm's rare pile, and its own upgrade. */
+export function openFarmPanel(
+  scene: Phaser.Scene,
+  model: GameModel,
+  id: FarmId,
+  area: Area,
+  onClose: () => void,
+  animate = true,
+): Phaser.GameObjects.Container {
+  const { farm, resources } = model.state;
+  const def = FARMS_BY_ID[id];
+  const crews = crewsOf(farm);
+  const here = crews[id];
+  const total = farm.droneCount;
+  const maxFarms = model.maxFarmsAtOnce();
+  const active = activeFarms(farm);
+  const panel = new Panel(scene, { area, onBackdrop: onClose, animate });
+
+  panel.header(def.name.toUpperCase(), COLORS.accentWarm);
+  panel.text(def.description, 26, TEXT_COLORS.secondary, { gapAfter: 12 });
+  for (const deposit of def.deposits.filter((d) => d.rare && d.range === 0)) {
+    const material = MATERIALS_BY_ID[deposit.material];
+    panel.row({
+      icon: materialIconKey(scene, material.id),
+      iconScale: 3,
+      title: `Rare pile: ${material.name}`,
+      titleColor: cssColor(RARITIES[material.rarity].color),
+      sub: 'Regrows slowly. Better drones can\'t dig it deeper; this farm\'s upgrade can.',
+      size: 26,
+      gapAfter: 12,
+    });
+  }
+
+  panel.divider();
+  panel.text(`DRONES HERE: ${here} OF ${total}`, 24, TEXT_COLORS.muted, { bold: true, gapAfter: 6 });
+  panel.text(
+    maxFarms === 1
+      ? 'Your drones work one farm at a time. Relay Masts in the Workshop let them split up.'
+      : `Your drones can work ${maxFarms} farms at once. Now working: ${active.map((f) => FARMS_BY_ID[f].name).join(', ') || 'none'}.`,
+    25,
+    TEXT_COLORS.secondary,
+    { gapAfter: 12 },
+  );
+  if (total > 0 && here < total) {
+    panel.button('Bring all drones here', { onClick: () => model.moveAllDrones(id), tone: 'primary', height: 84 });
+  }
+  if (maxFarms > 1 && total > 0) {
+    const canAdd = here < total && (here > 0 || active.length < maxFarms);
+    const canRemove = here > 0 && active.some((f) => f !== id);
+    panel.button('+1 drone here', { onClick: () => model.moveDroneTo(id), tone: 'secondary', enabled: canAdd, height: 80 });
+    panel.button('-1 drone (to another farm)', { onClick: () => model.moveDroneFrom(id), tone: 'neutral', enabled: canRemove, height: 80 });
+  }
+
+  const local = def.local;
+  if (local) {
+    panel.divider();
+    const level = localLevel(farm, id);
+    panel.text(`${local.name.toUpperCase()} · LEVEL ${level}/${local.maxLevel}`, 24, TEXT_COLORS.muted, { bold: true, gapAfter: 6 });
+    panel.text(local.description, 25, TEXT_COLORS.secondary, { gapAfter: 6 });
+    const now = Math.round((localRegrowth(farm, id) - 1) * 100);
+    const cost = localUpgradeCost(farm, id);
+    if (cost) {
+      const next = Math.round(local.regrowBonusPerLevel * (level + 1) * 100);
+      panel.text(`Piles here regrow +${now}% > +${next}%`, 27, GREEN, { gapAfter: 10 });
+      costRows(panel, scene, resources, cost);
+      panel.gap(6);
+      panel.button(level === 0 ? `Get the ${local.name}` : `Upgrade the ${local.name}`, {
+        enabled: canAfford(resources, cost),
+        onClick: () => model.buyLocalUpgrade(id),
+        tone: 'secondary',
+      });
+    } else {
+      panel.text(`Fully upgraded: piles here regrow +${now}%.`, 27, GREEN, { gapAfter: 12 });
+    }
   }
   panel.gap(4);
   panel.button('Close', { onClick: onClose, tone: 'neutral', height: 80 });

@@ -3,11 +3,11 @@ import type { MaterialId } from './materials';
 
 /*
  * Garage upgrades, bought in the Garage tab's Workshop: Drone Bays, the Warehouse, the Fuel
- * Depot and the Refinery (the Salvage Magnet lives there too; see economy.ts).
+ * Depot, the Refinery and Relay Masts (the Salvage Magnet lives there too; see economy.ts).
  * Numbers are placeholders, tuned with `npm run simulate`.
  */
 
-export type GarageUpgradeId = 'droneBays' | 'warehouse' | 'fuelDepot' | 'refinery';
+export type GarageUpgradeId = 'droneBays' | 'warehouse' | 'fuelDepot' | 'refinery' | 'relayMasts';
 
 export interface GarageUpgradeDef {
   id: GarageUpgradeId;
@@ -58,6 +58,16 @@ export const GARAGE_UPGRADES: readonly GarageUpgradeDef[] = [
     cost: {
       money: { base: 5_000, growth: 3.2 },
       materials: { scrapMetal: { base: 1_000, growth: 2.1 }, copperWire: { base: 100, growth: 2.2 }, aluminum: { base: 40, growth: 2.4 } },
+    },
+  },
+  {
+    id: 'relayMasts',
+    name: 'Relay Masts',
+    description: 'Radio relays out to the other farms: split your drones between more farms at once.',
+    maxLevel: 3,
+    cost: {
+      money: { base: 250_000, growth: 4 },
+      materials: { copperWire: { base: 5_000, growth: 2.4 }, aluminum: { base: 2_000, growth: 2.4 }, titanium: { base: 30, growth: 2 } },
     },
   },
 ];

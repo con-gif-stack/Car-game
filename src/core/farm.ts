@@ -3,13 +3,17 @@ import {
   DRONE_BRANCHES_BY_ID,
   DRONE_MODELS,
   DRONES,
+  FARM_IDS,
+  FARMS,
+  FARMS_BY_ID,
   GARAGE_POSITION,
   HAUL_VALUE,
-  JUNKYARD_DEPOSITS,
   SCAVENGE,
   type DepositDef,
   type DroneBranchId,
+  type FarmId,
 } from '../data/farm';
+import type { BiomeId } from '../data/biomes';
 import { emptyMaterials, type MaterialId } from '../data/materials';
 import { seededRandom } from './random';
 import type { MaterialStock } from './state';
@@ -31,6 +35,10 @@ export interface FarmState {
   scavenged: number;
   /** Level of each branch of the drone upgrade tree. */
   branches: Record<DroneBranchId, number>;
+  /** How many of the drones are stationed at each farm (they add up to droneCount). */
+  crews: Record<FarmId, number>;
+  /** Level of each farm's own upgrade (e.g. the Rust Highway's Tow Truck). */
+  local: Record<FarmId, number>;
 }
 
 /** True when a material can't be stored right now (drones leave its piles alone). */
@@ -43,8 +51,99 @@ export interface Haul {
   materials: MaterialStock;
 }
 
-export const DEPOSITS: readonly DepositDef[] = JUNKYARD_DEPOSITS;
+/** Every deposit on every farm. */
+export const DEPOSITS: readonly DepositDef[] = FARMS.flatMap((f) => f.deposits);
 const DEPOSITS_BY_ID: Record<string, DepositDef> = Object.fromEntries(DEPOSITS.map((d) => [d.id, d]));
+const FARM_OF: Record<string, FarmId> = Object.fromEntries(FARMS.flatMap((f) => f.deposits.map((d) => [d.id, f.id])));
+
+/** The farm a deposit is on. */
+export function farmOf(deposit: DepositDef): FarmId {
+  return FARM_OF[deposit.id] ?? 'junkyard';
+}
+
+/** Deposits on one farm. */
+export function farmDeposits(id: FarmId): readonly DepositDef[] {
+  return FARMS_BY_ID[id].deposits;
+}
+
+/** True when a farm can be visited: its biome has been reached on a run (the Junkyard always). */
+export function isFarmUnlocked(unlockedBiomes: readonly BiomeId[], id: FarmId): boolean {
+  return id === 'junkyard' || unlockedBiomes.includes(FARMS_BY_ID[id].biome);
+}
+
+function zeroFarms(): Record<FarmId, number> {
+  return Object.fromEntries(FARM_IDS.map((id) => [id, 0])) as Record<FarmId, number>;
+}
+
+/**
+ * Drones stationed at each farm, made consistent with the drone count: missing drones join
+ * the biggest crew (the Junkyard when there is none), extra ones leave the smallest crews.
+ */
+export function crewsOf(farm: FarmState): Record<FarmId, number> {
+  const crews = zeroFarms();
+  for (const id of FARM_IDS) crews[id] = Math.max(0, Math.floor(farm.crews?.[id] ?? 0));
+  let total = FARM_IDS.reduce((sum, id) => sum + crews[id], 0);
+  const count = Math.max(0, Math.floor(farm.droneCount));
+  const biggest = () => FARM_IDS.reduce((best, id) => (crews[id] > crews[best] ? id : best), 'junkyard' as FarmId);
+  if (total < count) crews[total === 0 ? 'junkyard' : biggest()] += count - total;
+  while (total > count) {
+    const smallest = FARM_IDS.filter((id) => crews[id] > 0).reduce((a, b) => (crews[b] < crews[a] ? b : a));
+    crews[smallest] -= 1;
+    total -= 1;
+  }
+  return crews;
+}
+
+/** Farms that have drones stationed at them. */
+export function activeFarms(farm: FarmState): FarmId[] {
+  const crews = crewsOf(farm);
+  return FARM_IDS.filter((id) => crews[id] > 0);
+}
+
+/** Sends every drone to one farm. */
+export function moveAllDrones(farm: FarmState, to: FarmId): void {
+  farm.crews = zeroFarms();
+  farm.crews[to] = Math.max(0, Math.floor(farm.droneCount));
+}
+
+/**
+ * Moves one drone to `to`, taken from the biggest crew elsewhere. A new farm can only get
+ * drones while fewer than `maxFarms` farms have them. Returns false if not possible.
+ */
+export function moveDroneTo(farm: FarmState, to: FarmId, maxFarms: number): boolean {
+  const crews = crewsOf(farm);
+  const others = FARM_IDS.filter((id) => id !== to && crews[id] > 0);
+  if (others.length === 0) return false;
+  if (crews[to] === 0 && FARM_IDS.filter((id) => crews[id] > 0).length >= maxFarms) return false;
+  const from = others.reduce((a, b) => (crews[b] > crews[a] ? b : a));
+  crews[from] -= 1;
+  crews[to] += 1;
+  farm.crews = crews;
+  return true;
+}
+
+/** Moves one drone away from `from` to the biggest other crew. Returns false if it is the only crew. */
+export function moveDroneFrom(farm: FarmState, from: FarmId): boolean {
+  const crews = crewsOf(farm);
+  const others = FARM_IDS.filter((id) => id !== from && crews[id] > 0);
+  if (crews[from] === 0 || others.length === 0) return false;
+  const to = others.reduce((a, b) => (crews[b] > crews[a] ? b : a));
+  crews[from] -= 1;
+  crews[to] += 1;
+  farm.crews = crews;
+  return true;
+}
+
+/** Multiplier on a farm's regrowth from its own upgrade. */
+export function localRegrowth(farm: FarmState, id: FarmId): number {
+  const def = FARMS_BY_ID[id].local;
+  return def ? 1 + def.regrowBonusPerLevel * localLevel(farm, id) : 1;
+}
+
+export function localLevel(farm: FarmState, id: FarmId): number {
+  const def = FARMS_BY_ID[id].local;
+  return def ? Math.min(def.maxLevel, Math.max(0, Math.floor(farm.local?.[id] ?? 0))) : 0;
+}
 
 export function createFarmState(): FarmState {
   return {
@@ -53,6 +152,8 @@ export function createFarmState(): FarmState {
     droneModel: 0,
     scavenged: 0,
     branches: emptyBranches(),
+    crews: zeroFarms(),
+    local: zeroFarms(),
   };
 }
 
@@ -109,8 +210,9 @@ export function inReach(farm: FarmState, deposit: DepositDef): boolean {
 }
 
 /** Deposits the drones can reach and whose material can still be stored. */
-export function workableDeposits(farm: FarmState, full: FullCheck = NEVER_FULL): DepositDef[] {
-  return DEPOSITS.filter((d) => inReach(farm, d) && !full(d.material));
+export function workableDeposits(farm: FarmState, full: FullCheck = NEVER_FULL, on?: FarmId): DepositDef[] {
+  const deposits = on ? farmDeposits(on) : DEPOSITS;
+  return deposits.filter((d) => inReach(farm, d) && !full(d.material));
 }
 
 export function depositDef(id: string): DepositDef | undefined {
@@ -129,9 +231,13 @@ export function haulValue(materials: Partial<Record<MaterialId, number>>): numbe
   return total;
 }
 
-/** Units per second a deposit regrows, with the drones' dig-deeper bonus. */
-function regenPerSecond(farm: FarmState, deposit: DepositDef): number {
-  return (deposit.regenPerMinute / 60) * droneStats(farm).heapYield;
+/**
+ * Units per second a deposit regrows: the drones dig deeper (except into rare deposits), and
+ * the farm's own upgrade adds to everything there.
+ */
+export function regenPerSecond(farm: FarmState, deposit: DepositDef): number {
+  const dig = deposit.rare ? 1 : droneStats(farm).heapYield;
+  return (deposit.regenPerMinute / 60) * dig * localRegrowth(farm, farmOf(deposit));
 }
 
 /** Deposits regrow over time, up to their maximum. */
@@ -151,13 +257,18 @@ export function repairFarm(farm: FarmState, maxDrones = DRONES.maxCount): FarmSt
     deposits[deposit.id] =
       typeof value === 'number' && Number.isFinite(value) ? Math.min(deposit.max, Math.max(0, value)) : deposit.max;
   }
-  return {
+  const repaired: FarmState = {
     deposits,
     droneCount: Math.min(maxDrones, Math.max(0, Math.floor(farm.droneCount))),
     droneModel: Math.min(DRONE_MODELS.length - 1, Math.max(0, Math.floor(farm.droneModel))),
     scavenged: Math.max(0, Math.floor(farm.scavenged)),
     branches: repairBranches(farm, Math.min(DRONE_MODELS.length - 1, Math.max(0, Math.floor(farm.droneModel)))),
+    crews: zeroFarms(),
+    local: zeroFarms(),
   };
+  repaired.crews = crewsOf({ ...repaired, crews: farm.crews ?? zeroFarms() });
+  for (const id of FARM_IDS) repaired.local[id] = localLevel(farm, id);
+  return repaired;
 }
 
 function repairBranches(farm: FarmState, model: number): Record<DroneBranchId, number> {
@@ -202,17 +313,21 @@ function tripSeconds(farm: FarmState, deposit: DepositDef): number {
  * Average hauling rates of the drones (units and money per second), assuming they keep
  * working steadily. Each deposit can't give more than it regrows.
  */
-export function farmRates(farm: FarmState, full: FullCheck = NEVER_FULL): Haul {
+export function farmRates(farm: FarmState, full: FullCheck = NEVER_FULL, only?: FarmId): Haul {
   const materials = emptyMaterials();
-  const deposits = workableDeposits(farm, full);
-  if (farm.droneCount <= 0 || deposits.length === 0) return { money: 0, materials };
+  const crews = crewsOf(farm);
   const drone = droneStats(farm);
-  const totalWeight = deposits.reduce((sum, d) => sum + d.weight, 0);
-  const averageTrip = deposits.reduce((sum, d) => sum + (d.weight / totalWeight) * tripSeconds(farm, d), 0);
-  const unitsPerSecond = (farm.droneCount * drone.capacity) / averageTrip;
-  for (const deposit of deposits) {
-    const wanted = unitsPerSecond * (deposit.weight / totalWeight);
-    materials[deposit.material] += Math.min(wanted, regenPerSecond(farm, deposit));
+  for (const id of FARM_IDS) {
+    if (crews[id] <= 0 || (only && id !== only)) continue;
+    const deposits = workableDeposits(farm, full, id);
+    if (deposits.length === 0) continue;
+    const totalWeight = deposits.reduce((sum, d) => sum + d.weight, 0);
+    const averageTrip = deposits.reduce((sum, d) => sum + (d.weight / totalWeight) * tripSeconds(farm, d), 0);
+    const unitsPerSecond = (crews[id] * drone.capacity) / averageTrip;
+    for (const deposit of deposits) {
+      const wanted = unitsPerSecond * (deposit.weight / totalWeight);
+      materials[deposit.material] += Math.min(wanted, regenPerSecond(farm, deposit));
+    }
   }
   return { money: haulValue(materials), materials };
 }
@@ -221,6 +336,8 @@ export type DronePhase = 'waiting' | 'outbound' | 'mining' | 'returning' | 'unlo
 
 /** A drone in flight (not saved: drones restart at the garage when the game loads). */
 export interface Drone {
+  /** The farm it works. */
+  farm: FarmId;
   x: number;
   y: number;
   phase: DronePhase;
@@ -239,20 +356,29 @@ export class FarmSim {
     this.rand = seededRandom(seed);
   }
 
-  /** Adds drones up to the farm's drone count (new ones take off one after another). */
+  /**
+   * Matches the drones to each farm's crew: new ones take off one after another, and drones
+   * moved to another farm leave (a moved drone starts at that farm's garage).
+   */
   sync(farm: FarmState): void {
-    while (this.drones.length < farm.droneCount) {
-      this.drones.push({
-        x: GARAGE_POSITION.x,
-        y: GARAGE_POSITION.y,
-        phase: 'waiting',
-        target: null,
-        cargo: 0,
-        material: null,
-        timer: this.drones.length * 0.8,
-      });
+    const crews = crewsOf(farm);
+    for (const id of FARM_IDS) {
+      let here = this.drones.filter((d) => d.farm === id);
+      for (let i = here.length; i < crews[id]; i++) {
+        this.drones.push({
+          farm: id,
+          x: GARAGE_POSITION.x,
+          y: GARAGE_POSITION.y,
+          phase: 'waiting',
+          target: null,
+          cargo: 0,
+          material: null,
+          timer: i * 0.8,
+        });
+      }
+      here = this.drones.filter((d) => d.farm === id);
+      for (const extra of here.slice(crews[id])) this.drones.splice(this.drones.indexOf(extra), 1);
     }
-    this.drones.length = Math.min(this.drones.length, farm.droneCount);
   }
 
   /** Advances every drone and regrows deposits. Returns what was unloaded at the garage. */
@@ -315,7 +441,7 @@ export class FarmSim {
 
   /** Picks a deposit at random, weighted by how often drones should visit it. */
   private chooseTarget(drone: Drone, farm: FarmState, full: FullCheck): void {
-    const available = workableDeposits(farm, full).filter((d) => (farm.deposits[d.id] ?? 0) >= 0.5);
+    const available = workableDeposits(farm, full, drone.farm).filter((d) => (farm.deposits[d.id] ?? 0) >= 0.5);
     if (available.length === 0) {
       drone.timer = 2;
       return;

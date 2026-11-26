@@ -96,6 +96,9 @@ const MIGRATIONS: Record<number, (save: RawSave) => RawSave> = {
   // Refinery) were added. All start at level 0, filled in on load. Materials already held
   // above the new storage limits are kept; only new hauls stop at the limit.
   5: (save) => ({ ...save, version: 6 }),
+  // v6 → v7: biome farms. Existing drones are stationed at the Junkyard, the new farms'
+  // piles start full, and Relay Masts and each farm's own upgrade start at level 0.
+  6: (save) => ({ ...save, version: 7 }),
 };
 
 function isRecord(value: unknown): value is RawSave {

@@ -1,10 +1,12 @@
-import type { DepositKind } from '../data/farm';
+import type { DepositKind, FarmId, GroundPalette } from '../data/farm';
+import { mix } from './color';
 import { PixelGrid, seededRandom } from './PixelGrid';
 
 /*
- * Placeholder top-down pixel art for the Junkyard farm, generated in code: dusty ground,
- * the garage building, deposits (scrap heaps, tyre stacks, wire tangles, engine blocks) at
- * several fill levels, car wrecks, and the drones in each of their four models.
+ * Placeholder top-down pixel art for the farms, generated in code: each farm's ground, the
+ * garage building, deposits (scrap heaps, tyre stacks, wire tangles, engine blocks, car and
+ * plane wrecks, pipe stacks, cable drums, old machines, ceramic insulators) at several fill
+ * levels, car wrecks, and the drones in each of their four models.
  * The view is top-down and slightly angled: things show a top face and a little of the front.
  */
 
@@ -19,10 +21,12 @@ export const JUNKYARD_GROUND = {
 
 const OUTLINE = 0x1a1414;
 
-/** Dusty junkyard ground with darker patches, gravel, oil stains and tyre tracks. */
-export function buildFarmGround(w: number, h: number, seed: number): PixelGrid {
+/**
+ * A farm's ground: blotchy base with darker patches, gravel and stains, plus each farm's own
+ * details (painted bays on the truck stop, slab joints in the factory yard, ripples in the sand).
+ */
+export function buildFarmGround(w: number, h: number, seed: number, G: GroundPalette = JUNKYARD_GROUND, style: FarmId = 'junkyard'): PixelGrid {
   const rand = seededRandom(seed);
-  const G = JUNKYARD_GROUND;
   const g = new PixelGrid(w, h);
   // Blotchy base: a coarse random field smoothed by sampling a few points.
   const blobs = Array.from({ length: Math.round((w * h) / 90) }, () => ({
@@ -50,11 +54,52 @@ export function buildFarmGround(w: number, h: number, seed: number): PixelGrid {
     const r = 1.5 + rand() * 3;
     g.paint(G.oil, (x, y) => ((x + 0.5 - cx) / (r * 1.6)) ** 2 + ((y + 0.5 - cy) / r) ** 2 <= 1);
   }
+  switch (style) {
+    case 'rustHighway': {
+      // Faded parking bays and cracks in the old truck-stop asphalt.
+      const paint = mix(0xd8c46a, G.base, 0.55);
+      for (const row of [Math.round(h * 0.12), Math.round(h * 0.5)]) {
+        for (let x = 6; x < w - 6; x += 14) for (let y = row; y < row + 8; y++) if (rand() < 0.75) g.set(x, y, paint);
+        for (let x = 6; x < w - 6; x++) if (rand() < 0.6) g.set(x, row + 8, paint);
+      }
+      for (let i = 0; i < (w * h) / 900; i++) {
+        let x = Math.floor(rand() * w);
+        let y = Math.floor(rand() * h);
+        for (let k = 0; k < 10; k++) {
+          g.set(x, y, G.oil);
+          x += rand() < 0.5 ? 1 : 0;
+          y += rand() < 0.6 ? 1 : -1;
+        }
+      }
+      break;
+    }
+    case 'industrial': {
+      // Concrete slabs with dark joints and the odd lighter, newer slab.
+      const slab = 14;
+      g.forEach((x, y, c) => {
+        if (x % slab === 0 || y % slab === 0) g.set(x, y, G.dark);
+        else if ((Math.floor(x / slab) * 7 + Math.floor(y / slab) * 3) % 11 === 0 && c === G.base) g.set(x, y, G.light);
+      });
+      break;
+    }
+    case 'desert': {
+      // Wind ripples: wavy lighter and darker lines across the sand.
+      g.forEach((x, y, c) => {
+        const wave = Math.sin(x * 0.35 + y * 0.08) * 1.5 + y;
+        const band = ((wave % 6) + 6) % 6;
+        if (band < 0.8) g.set(x, y, G.light);
+        else if (band > 5.2 && c !== G.oil) g.set(x, y, G.dark);
+      });
+      break;
+    }
+    case 'junkyard':
+      break;
+  }
   return g;
 }
 
 /** Faint tyre tracks between two points (drawn onto the ground). */
-export function drawTracks(g: PixelGrid, from: { x: number; y: number }, to: { x: number; y: number }): void {
+export function drawTracks(g: PixelGrid, from: { x: number; y: number }, to: { x: number; y: number }, color: number = JUNKYARD_GROUND.track): void {
   const steps = Math.ceil(Math.hypot(to.x - from.x, to.y - from.y));
   const nx = -(to.y - from.y) / Math.max(1, steps);
   const ny = (to.x - from.x) / Math.max(1, steps);
@@ -63,7 +108,7 @@ export function drawTracks(g: PixelGrid, from: { x: number; y: number }, to: { x
     const t = i / Math.max(1, steps);
     const x = from.x + (to.x - from.x) * t;
     const y = from.y + (to.y - from.y) * t;
-    for (const side of [-2, 2]) g.set(Math.round(x + nx * side), Math.round(y + ny * side), JUNKYARD_GROUND.track);
+    for (const side of [-2, 2]) g.set(Math.round(x + nx * side), Math.round(y + ny * side), color);
   }
 }
 
@@ -163,6 +208,120 @@ export function buildDeposit(kind: DepositKind, stage: number, seed: number): Pi
         const ly = c + 2 + (rand() - 0.5) * 6 * scale;
         const r = 2 + rand() * 3 * scale;
         g.paint(loop % 2 ? 0xd0743a : 0xf2a66a, (x, y, col) => col === null && Math.abs(Math.hypot((x + 0.5 - lx) / 1.4, y + 0.5 - ly) - r) < 0.6);
+      }
+      break;
+    }
+    case 'carWreck': {
+      // A stripped car shell, silver panels, seen from above; fewer panels as it empties.
+      const len = Math.round(10 + stage * 3);
+      const x0 = Math.round(c - len / 2);
+      const y0 = Math.round(c - 3);
+      const panel = [0xc9ced8, 0xa9afbc, 0x8a909e];
+      for (let y = 0; y < 8; y++) {
+        for (let x = 0; x < len; x++) {
+          if ((x === 0 || x === len - 1) && (y === 0 || y === 7)) continue;
+          const missing = stage < 3 && rand() < 0.25 * (3 - stage);
+          g.set(x0 + x, y0 + y, missing ? 0x4a4038 : y < 2 ? panel[0]! : y < 6 ? panel[1]! : panel[2]!);
+        }
+      }
+      for (let y = 2; y < 6; y++) for (let x = Math.round(len * 0.35); x < Math.round(len * 0.6); x++) g.set(x0 + x, y0 + y, 0x2a3138);
+      break;
+    }
+    case 'raceWreck': {
+      // A crashed race car: low and wide, red and white livery, carbon-weave panels.
+      const x0 = Math.round(c - 9);
+      const y0 = Math.round(c - 3 - stage * 0.5);
+      for (let y = 0; y < 7 + stage; y++) {
+        for (let x = 0; x < 18; x++) {
+          if ((x < 2 || x > 15) && (y < 1 || y > 5 + stage)) continue;
+          const carbon = x > 5 && x < 12 && y > 1;
+          const col = carbon ? ((Math.floor(x / 1) + y) % 2 ? 0x1c1e26 : 0x3a3e4c) : x < 5 ? 0xd8343c : y < 2 ? 0xf1eefb : 0xb8282e;
+          g.set(x0 + x, y0 + y, col);
+        }
+      }
+      // A broken rear wing.
+      for (let y = -2; y < 0; y++) for (let x = 13; x < 18; x++) g.set(x0 + x, y0 + y, 0x1c1e26);
+      break;
+    }
+    case 'pipeStack': {
+      // Steel pipes stacked in a pyramid, seen end-on.
+      const rows = stage + 1;
+      for (let row = 0; row < rows; row++) {
+        const count = rows - row;
+        for (let i = 0; i < count; i++) {
+          const px = c + (i - (count - 1) / 2) * 6;
+          const py = c + 8 - row * 5;
+          g.paint(0x8a8d96, (x, y) => Math.hypot(x + 0.5 - px, y + 0.5 - py) < 3);
+          g.paint(0xb3b6bf, (x, y, col) => col === 0x8a8d96 && x + 0.5 < px - 0.5 && y + 0.5 < py);
+          g.paint(0x1c1d22, (x, y) => Math.hypot(x + 0.5 - px, y + 0.5 - py) < 1.6);
+          if (rand() < 0.5) g.set(Math.round(px + 1), Math.round(py + 2), 0x8a4b23);
+        }
+      }
+      break;
+    }
+    case 'cableDrum': {
+      // Wooden cable drums wound with copper cable.
+      const drums = Math.min(3, stage);
+      for (let i = 0; i < drums; i++) {
+        const dx = c + (i - (drums - 1) / 2) * 9;
+        const dy = c + 2 - (i % 2) * 3;
+        g.paint(0x8a5a32, (x, y) => Math.hypot((x + 0.5 - dx) / 1.15, y + 0.5 - dy) < 4.6);
+        g.paint(0xd0743a, (x, y) => Math.hypot((x + 0.5 - dx) / 1.15, y + 0.5 - dy) < 3.4);
+        g.paint(0xf2a66a, (x, y, col) => col === 0xd0743a && (x + y) % 3 === 0);
+        g.paint(0x5a3a22, (x, y) => Math.hypot((x + 0.5 - dx) / 1.15, y + 0.5 - dy) < 1.2);
+      }
+      break;
+    }
+    case 'machinery': {
+      // An old machine tool: a grey-blue body, hazard stripes and a titanium glint.
+      const w0 = 10 + stage * 2;
+      const x0 = Math.round(c - w0 / 2);
+      const y0 = Math.round(c - 5);
+      for (let y = 0; y < 10; y++) {
+        for (let x = 0; x < w0; x++) {
+          const top = y < 3;
+          const stripe = y === 9 && (x % 4 < 2);
+          g.set(x0 + x, y0 + y, stripe ? 0xffd23f : top ? 0x8a97ad : y === 9 ? 0x1c1e26 : 0x5c6a80);
+        }
+      }
+      for (let x = 2; x < w0 - 2; x += 3) g.set(x0 + x, y0 + 5, 0x2a3040);
+      g.set(x0 + 2, y0 + 1, 0xe6f2ff);
+      g.set(x0 + 3, y0 + 1, 0xb9d4ff);
+      break;
+    }
+    case 'planeWreck': {
+      // An aircraft fuselage with stubby wings; smaller pieces as it's stripped.
+      const len = 8 + stage * 4;
+      const x0 = Math.round(c - len / 2);
+      const y0 = Math.round(c - 2);
+      for (let x = 0; x < len; x++) {
+        for (let y = 0; y < 5; y++) {
+          if ((x === 0 || x === len - 1) && (y === 0 || y === 4)) continue;
+          g.set(x0 + x, y0 + y, y === 0 ? 0xeef0f4 : y < 3 ? 0xc6cad4 : 0x9a9fab);
+        }
+        if (x % 3 === 1 && x > 1 && x < len - 2) g.set(x0 + x, y0 + 1, 0x3a4a5a);
+      }
+      if (stage >= 2) {
+        const wx = x0 + Math.round(len * 0.4);
+        for (let k = 0; k < 6; k++) {
+          for (let t = 0; t < 3; t++) {
+            g.set(wx + t + Math.floor(k / 2), y0 - 1 - k, 0xb8bdc8);
+            g.set(wx + t + Math.floor(k / 2), y0 + 5 + k, 0x9a9fab);
+          }
+        }
+      }
+      break;
+    }
+    case 'insulators': {
+      // Ribbed ceramic insulators from old power lines, piled up.
+      const count = 2 + stage * 2;
+      for (let i = 0; i < count; i++) {
+        const ix = Math.round(c - 8 + (i % 4) * 5 + rand());
+        const iy = Math.round(c + 4 - Math.floor(i / 4) * 5 - rand() * 2);
+        for (let k = 0; k < 3; k++) {
+          const half = 2 - (k === 1 ? 1 : 0);
+          for (let x = -half; x <= half; x++) g.set(ix + x, iy - k, k === 2 ? 0xffffff : x < 0 ? 0xf2ece0 : 0xc8bfae);
+        }
       }
       break;
     }

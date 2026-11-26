@@ -1,17 +1,17 @@
 import Phaser from 'phaser';
 import { buildDeposit, buildDrone, buildFarmGround, buildGarage, buildWreck, depositStage, drawTracks } from '../art/farmArt';
 import type { Haul } from '../core/farm';
-import { DEPOSITS, farmRates, inReach } from '../core/farm';
+import { crewsOf, farmDeposits, farmRates, inReach } from '../core/farm';
 import { formatNumber, formatPrecise } from '../core/format';
 import type { PurchaseKind } from '../core/GameModel';
-import { canAfford, droneBuildCost } from '../core/upgrades';
-import { DRONE_MODELS, GARAGE_POSITION, MAP_HEIGHT, MAP_WIDTH } from '../data/farm';
+import { canAfford, droneBuildCost, localUpgradeCost } from '../core/upgrades';
+import { DRONE_MODELS, FARM_IDS, FARMS_BY_ID, GARAGE_POSITION, MAP_HEIGHT, MAP_WIDTH, type DepositDef, type FarmId } from '../data/farm';
 import { MATERIAL_IDS, MATERIALS_BY_ID, RARITIES } from '../data/materials';
 import { MILESTONES_BY_ID } from '../data/milestones';
 import { COLORS, TEXT_COLORS, UI_PIXEL } from '../ui/theme';
 import type { AppContext } from './context';
 import { cssColor } from './panel';
-import { openDroneBayPanel, panelSignature } from './panels';
+import { openDroneBayPanel, openFarmPanel, panelSignature } from './panels';
 import { overlayStyle, textStyle } from './textStyles';
 import { ensureGridTexture } from './textures';
 import { addButton, addDot, addFrame, PixelBar, uiIconKey, type PixelButton } from './ui';
@@ -32,34 +32,35 @@ const ROTOR_FRAME_MS = 70;
 /** Whole amounts as "+1", fractions as "+0.75". */
 const amount = (value: number) => (Math.abs(value - Math.round(value)) < 1e-6 ? formatNumber(value) : formatPrecise(value));
 
-/** Decorative wrecks around the yard (map metres). */
-const WRECKS = [
-  { x: 8, y: 6 },
-  { x: 92, y: 58 },
-  { x: 28, y: 72 },
-  { x: 74, y: 70 },
-  { x: 94, y: 4 },
-  { x: 6, y: 82 },
-];
-
 interface DroneSprite {
   shadow: Phaser.GameObjects.Ellipse;
   body: Phaser.GameObjects.Image;
   crate: Phaser.GameObjects.Rectangle;
 }
 
+type OpenPanel = 'droneBay' | 'farm';
+
 /**
- * Farm tab (home): a top-down view of the Junkyard. Tap piles to scavenge by hand; once
- * unlocked, drones fly out, mine, and haul back to the garage, even while you're away.
+ * Farm tab (home): a top-down view of a farm. The Junkyard comes first; reaching a biome on a
+ * run unlocks its farm, and the arrows at the top switch between them. Tap piles to scavenge
+ * by hand; drones fly out from the garage, mine, and haul back, even while you're away. The
+ * drones work one farm at a time (Relay Masts let them split up).
  */
 export class FarmScene extends Phaser.Scene {
   private mapTop = 0;
+  private mapHeight = 0;
   private k = 1;
+  private viewed: FarmId = 'junkyard';
+  /** Everything drawn for the farm on screen, rebuilt when switching farms. */
+  private mapObjects: Phaser.GameObjects.GameObject[] = [];
   private readonly depositImages = new Map<string, Phaser.GameObjects.Image>();
   private readonly depositStages = new Map<string, number>();
   private readonly lockIcons = new Map<string, Phaser.GameObjects.Image>();
   private readonly droneSprites: DroneSprite[] = [];
   private garagePoint = { x: 0, y: 0 };
+
+  // Farm switcher.
+  private switcher: Phaser.GameObjects.GameObject[] = [];
 
   // Info panel.
   private titleText!: Phaser.GameObjects.Text;
@@ -68,11 +69,15 @@ export class FarmScene extends Phaser.Scene {
   private progress!: PixelBar;
   private bayButton!: PixelButton;
   private bayDot!: Phaser.GameObjects.Image;
+  private farmButton!: PixelButton;
+  private farmDot!: Phaser.GameObjects.Image;
 
   private panel: Phaser.GameObjects.Container | null = null;
+  private openPanel: OpenPanel | null = null;
   private panelSignature = '';
   private refreshTimer = 0;
   private hintTweens: Phaser.Tweens.Tween[] = [];
+  private unlockedCount = 0;
 
   constructor(private readonly ctx: AppContext) {
     super({ key: 'FarmTab' });
@@ -82,25 +87,37 @@ export class FarmScene extends Phaser.Scene {
     const { content } = this.ctx.layout;
     this.cameras.main.setViewport(content.x, content.y, content.width, content.height);
     const width = content.width;
-    const mapHeight = content.height - PANEL_HEIGHT - BOTTOM_PAD;
+    this.mapHeight = content.height - PANEL_HEIGHT - BOTTOM_PAD;
     this.k = width / MAP_WIDTH;
     // The garage sits near the bottom; taller screens show more ground above.
-    this.mapTop = mapHeight - MAP_HEIGHT * this.k;
+    this.mapTop = this.mapHeight - MAP_HEIGHT * this.k;
 
-    this.createMap(width, mapHeight);
-    this.createInfoPanel(width, mapHeight);
+    // Start on the farm where most drones are.
+    const crews = crewsOf(this.ctx.model.state.farm);
+    this.viewed = FARM_IDS.reduce((best, id) => (crews[id] > crews[best] ? id : best), 'junkyard' as FarmId);
+    this.createMap();
+    this.createInfoPanel(width, this.mapHeight);
+    this.createSwitcher();
     this.refreshInfo();
 
     const model = this.ctx.model;
     const offHaul = model.events.on('hauled', (haul) => this.onHaul(haul));
     const offBuy = model.events.on('purchased', (kind) => this.onPurchased(kind));
-    const offMilestone = model.events.on('milestoneReached', () => this.refreshInfo());
+    const offMilestone = model.events.on('milestoneReached', () => {
+      this.createSwitcher();
+      this.refreshInfo();
+    });
+    const offCrews = model.events.on('crewsChanged', () => this.refreshInfo());
     this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => {
       offHaul();
       offBuy();
       offMilestone();
+      offCrews();
     });
-    this.events.on(Phaser.Scenes.Events.WAKE, () => this.refreshInfo());
+    this.events.on(Phaser.Scenes.Events.WAKE, () => {
+      this.createSwitcher();
+      this.refreshInfo();
+    });
     this.input.keyboard?.on('keydown-ESC', () => this.closePanel());
   }
 
@@ -112,8 +129,9 @@ export class FarmScene extends Phaser.Scene {
       this.refreshDeposits();
       this.refreshLocks();
       this.refreshInfo();
+      if (this.unlockedFarms().length !== this.unlockedCount) this.createSwitcher();
       const signature = panelSignature(this.ctx.model);
-      if (this.panel && signature !== this.panelSignature) this.showDroneBay();
+      if (this.openPanel && signature !== this.panelSignature) this.showPanel(this.openPanel);
     }
   }
 
@@ -122,27 +140,55 @@ export class FarmScene extends Phaser.Scene {
     return { x: p.x * this.k, y: this.mapTop + p.y * this.k };
   }
 
-  private createMap(width: number, mapHeight: number): void {
-    // Ground, with tyre tracks from the garage to each deposit.
+  private unlockedFarms(): FarmId[] {
+    return FARM_IDS.filter((id) => this.ctx.model.isFarmUnlocked(id));
+  }
+
+  /** Shows another farm. */
+  private viewFarm(id: FarmId): void {
+    if (id === this.viewed) return;
+    this.viewed = id;
+    this.cameras.main.fadeIn(220, 10, 8, 24);
+    this.createMap();
+    this.createSwitcher();
+    this.refreshInfo();
+  }
+
+  /** Draws the viewed farm: ground with tyre tracks, wrecks, the garage and the deposits. */
+  private createMap(): void {
+    for (const obj of this.mapObjects) obj.destroy();
+    this.mapObjects = [];
+    this.depositImages.clear();
+    this.depositStages.clear();
+    this.lockIcons.clear();
+    this.stopHints();
+    const add = <T extends Phaser.GameObjects.GameObject>(obj: T) => {
+      this.mapObjects.push(obj);
+      return obj;
+    };
+    const def = FARMS_BY_ID[this.viewed];
+    const width = this.cameras.main.width;
+
     const gw = Math.ceil(width / GROUND_SCALE);
-    const gh = Math.ceil(mapHeight / GROUND_SCALE);
-    const groundKey = `farm/junkyard/ground/${gw}x${gh}`;
+    const gh = Math.ceil(this.mapHeight / GROUND_SCALE);
+    const groundKey = `farm/${def.id}/ground/${gw}x${gh}`;
     const toGround = (p: { x: number; y: number }) => {
       const s = this.toScreen(p);
       return { x: s.x / GROUND_SCALE, y: s.y / GROUND_SCALE };
     };
     ensureGridTexture(this, groundKey, () => {
-      const g = buildFarmGround(gw, gh, 5);
-      for (const deposit of DEPOSITS) drawTracks(g, toGround(GARAGE_POSITION), toGround(deposit));
+      const g = buildFarmGround(gw, gh, 5 + FARM_IDS.indexOf(def.id), def.ground, def.id);
+      for (const deposit of def.deposits) drawTracks(g, toGround(GARAGE_POSITION), toGround(deposit), def.ground.track);
       return g;
     });
-    this.add.image(0, 0, groundKey).setOrigin(0).setScale(GROUND_SCALE).setDepth(-1000);
+    add(this.add.image(0, 0, groundKey).setOrigin(0).setScale(GROUND_SCALE).setDepth(-1000));
 
-    WRECKS.forEach((p, i) => {
-      const key = `farm/wreck/${i}`;
-      ensureGridTexture(this, key, () => buildWreck(i + 1));
+    def.wrecks.forEach((p, i) => {
+      const seed = FARM_IDS.indexOf(def.id) * 10 + i + 1;
+      const key = `farm/wreck/${seed}`;
+      ensureGridTexture(this, key, () => buildWreck(seed));
       const s = this.toScreen(p);
-      this.add.image(s.x, s.y, key).setScale(BUILDING_SCALE).setDepth(s.y);
+      add(this.add.image(s.x, s.y, key).setScale(BUILDING_SCALE).setDepth(s.y));
     });
 
     // Garage: its landing pad sits on the garage position.
@@ -150,27 +196,84 @@ export class FarmScene extends Phaser.Scene {
     const g = this.toScreen(GARAGE_POSITION);
     this.garagePoint = g;
     const garageScale = BUILDING_SCALE + 1;
-    this.add.image(g.x - 22 * garageScale, g.y - 34 * garageScale, 'farm/garage').setOrigin(0).setScale(garageScale).setDepth(g.y);
+    add(this.add.image(g.x - 22 * garageScale, g.y - 34 * garageScale, 'farm/garage').setOrigin(0).setScale(garageScale).setDepth(g.y));
 
     // Deposits: tap to scavenge.
-    for (const deposit of DEPOSITS) {
+    for (const deposit of def.deposits) {
       const s = this.toScreen(deposit);
-      const image = this.add.image(s.x, s.y, this.depositKey(deposit.id)).setScale(DEPOSIT_SCALE).setDepth(s.y);
+      const image = add(this.add.image(s.x, s.y, this.depositKey(deposit)).setScale(DEPOSIT_SCALE).setDepth(s.y));
       image.setInteractive({ useHandCursor: true });
-      image.on('pointerdown', () => this.scavenge(deposit.id));
+      image.on('pointerdown', () => this.scavenge(deposit));
       this.depositImages.set(deposit.id, image);
       if (deposit.range > 0) {
-        const lock = this.add.image(s.x, s.y - 70, uiIconKey(this, 'lock')).setScale(UI_PIXEL * 0.75).setDepth(s.y + 1);
-        this.lockIcons.set(deposit.id, lock);
+        this.lockIcons.set(deposit.id, add(this.add.image(s.x, s.y - 70, uiIconKey(this, 'lock')).setScale(UI_PIXEL * 0.75).setDepth(s.y + 1)));
+      }
+      // Rare piles sparkle so they stand out.
+      if (deposit.rare) {
+        const color = RARITIES[MATERIALS_BY_ID[deposit.material].rarity].color;
+        const star = add(this.add.image(s.x + 50, s.y - 40, uiIconKey(this, 'star', color)).setScale(2).setDepth(s.y + 2));
+        this.tweens.add({ targets: star, alpha: 0.2, scale: 1.4, duration: 900, yoyo: true, repeat: -1, ease: 'Sine.easeInOut' });
       }
     }
+    for (const sprite of this.droneSprites.splice(0)) {
+      sprite.shadow.destroy();
+      sprite.body.destroy();
+      sprite.crate.destroy();
+    }
     this.refreshLocks();
+  }
+
+  /** The farm's name under the garage, with arrows to the other unlocked farms. */
+  private createSwitcher(): void {
+    for (const obj of this.switcher) obj.destroy();
+    this.switcher = [];
+    const farms = this.unlockedFarms();
+    this.unlockedCount = farms.length;
+    if (farms.length < 2) return;
+    // Sits on the open ground just below the garage, which every farm keeps clear.
+    const width = this.cameras.main.width;
+    const y = this.mapHeight - 46;
+    const name = this.add.text(width / 2, y, FARMS_BY_ID[this.viewed].name, overlayStyle(30, TEXT_COLORS.primary, true)).setOrigin(0.5).setDepth(6501);
+    const plateWidth = Math.max(300, name.width + 64);
+    const plate = addFrame(this, width / 2, y, plateWidth, 64, { kind: 'card', color: COLORS.accentWarm, originX: 0.5, originY: 0.5 }).setDepth(6500);
+    const index = farms.indexOf(this.viewed);
+    const go = (step: number) => this.viewFarm(farms[(index + step + farms.length) % farms.length] ?? 'junkyard');
+    const offset = plateWidth / 2 + 52;
+    const left = addButton(this, width / 2 - offset, y, 80, 64, '<', { onClick: () => go(-1), tone: 'neutral', fontSize: 40 }).setDepth(6500);
+    const right = addButton(this, width / 2 + offset, y, 80, 64, '>', { onClick: () => go(1), tone: 'neutral', fontSize: 40 }).setDepth(6500);
+    // Dots above the name: which of the unlocked farms this is.
+    const dots = farms.map((id, i) =>
+      this.add
+        .rectangle(width / 2 + (i - (farms.length - 1) / 2) * 22, y - 44, 12, 12, id === this.viewed ? COLORS.accentWarm : 0x3b2f6a)
+        .setStrokeStyle(2, 0x07050f)
+        .setDepth(6501),
+    );
+    this.switcher.push(plate, name, left, right, ...dots);
+  }
+
+  /** Texture key for a deposit at its current fill stage (created on first use). */
+  private depositKey(deposit: DepositDef): string {
+    const stage = depositStage(this.ctx.model.state.farm.deposits[deposit.id] ?? 0, deposit.max);
+    this.depositStages.set(deposit.id, stage);
+    const seed = farmDeposits(this.viewed).indexOf(deposit) + 1 + FARM_IDS.indexOf(this.viewed) * 20;
+    const key = `farm/deposit/${deposit.kind}/${seed}/${stage}`;
+    ensureGridTexture(this, key, () => buildDeposit(deposit.kind, stage, seed));
+    return key;
+  }
+
+  private refreshDeposits(): void {
+    for (const deposit of farmDeposits(this.viewed)) {
+      const stage = depositStage(this.ctx.model.state.farm.deposits[deposit.id] ?? 0, deposit.max);
+      if (stage !== this.depositStages.get(deposit.id)) {
+        this.depositImages.get(deposit.id)?.setTexture(this.depositKey(deposit));
+      }
+    }
   }
 
   /** Far piles out of the drones' Range are dimmed and show a lock. */
   private refreshLocks(): void {
     const farm = this.ctx.model.state.farm;
-    for (const deposit of DEPOSITS) {
+    for (const deposit of farmDeposits(this.viewed)) {
       const reachable = inReach(farm, deposit);
       const image = this.depositImages.get(deposit.id);
       if (image) {
@@ -181,32 +284,10 @@ export class FarmScene extends Phaser.Scene {
     }
   }
 
-  /** Texture key for a deposit at its current fill stage (created on first use). */
-  private depositKey(id: string): string {
-    const deposit = DEPOSITS.find((d) => d.id === id);
-    if (!deposit) return '__DEFAULT';
-    const stage = depositStage(this.ctx.model.state.farm.deposits[id] ?? 0, deposit.max);
-    this.depositStages.set(id, stage);
-    const seed = DEPOSITS.indexOf(deposit) + 1;
-    const key = `farm/deposit/${deposit.kind}/${seed}/${stage}`;
-    ensureGridTexture(this, key, () => buildDeposit(deposit.kind, stage, seed));
-    return key;
-  }
-
-  private refreshDeposits(): void {
-    for (const deposit of DEPOSITS) {
-      const stage = depositStage(this.ctx.model.state.farm.deposits[deposit.id] ?? 0, deposit.max);
-      if (stage !== this.depositStages.get(deposit.id)) {
-        this.depositImages.get(deposit.id)?.setTexture(this.depositKey(deposit.id));
-      }
-    }
-  }
-
-  private scavenge(depositId: string): void {
+  private scavenge(deposit: DepositDef): void {
     if (this.panel) return;
-    const image = this.depositImages.get(depositId);
-    const deposit = DEPOSITS.find((d) => d.id === depositId);
-    if (!image || !deposit) return;
+    const image = this.depositImages.get(deposit.id);
+    if (!image) return;
     if (!inReach(this.ctx.model.state.farm, deposit)) {
       this.popup(image.x, image.y - 50, `Out of reach: needs Range ${deposit.range}`, COLORS.textSecondary);
       return;
@@ -215,7 +296,7 @@ export class FarmScene extends Phaser.Scene {
       this.popup(image.x, image.y - 50, `${MATERIALS_BY_ID[deposit.material].name} storage is full`, COLORS.accentWarm);
       return;
     }
-    const haul = this.ctx.model.scavenge(depositId);
+    const haul = this.ctx.model.scavenge(deposit.id);
     // A little squash so the tap feels physical.
     this.tweens.killTweensOf(image);
     image.setScale(DEPOSIT_SCALE);
@@ -235,7 +316,8 @@ export class FarmScene extends Phaser.Scene {
   }
 
   private onHaul(haul: Haul): void {
-    if (!this.scene.isActive()) return;
+    // Hauls come from every farm with drones; only show them on a farm that has some.
+    if (!this.scene.isActive() || crewsOf(this.ctx.model.state.farm)[this.viewed] <= 0) return;
     const parts: string[] = [];
     for (const id of MATERIAL_IDS) {
       if (haul.materials[id] > 0) parts.push(`+${amount(haul.materials[id])} ${MATERIALS_BY_ID[id].name}`);
@@ -246,11 +328,9 @@ export class FarmScene extends Phaser.Scene {
   }
 
   private onPurchased(kind: PurchaseKind): void {
-    if (kind === 'drone' || kind === 'droneModel') this.cameras.main.flash(160, 255, 255, 255, false);
-    if (kind === 'drone' || kind === 'droneModel' || kind === 'droneBranch' || kind === 'garage') {
-      this.refreshLocks();
-      this.refreshInfo();
-    }
+    if (kind === 'drone' || kind === 'droneModel' || kind === 'farmLocal') this.cameras.main.flash(160, 255, 255, 255, false);
+    this.refreshLocks();
+    this.refreshInfo();
   }
 
   private popup(x: number, y: number, label: string, color: number): void {
@@ -258,10 +338,10 @@ export class FarmScene extends Phaser.Scene {
     this.tweens.add({ targets: text, y: y - 70, alpha: 0, duration: 1200, ease: 'Cubic.easeOut', onComplete: () => text.destroy() });
   }
 
-  /** Keeps one sprite per drone in the simulation, positioned and animated. */
+  /** Keeps one sprite per drone working the viewed farm, positioned and animated. */
   private updateDrones(time: number): void {
     const model = this.ctx.model;
-    const drones = model.farmSim.drones;
+    const drones = model.farmSim.drones.filter((d) => d.farm === this.viewed);
     const droneModel = model.state.farm.droneModel;
     const frame = Math.floor(time / ROTOR_FRAME_MS) % 2;
     const key = this.droneKey(droneModel, frame);
@@ -304,28 +384,37 @@ export class FarmScene extends Phaser.Scene {
     const y = top + 16;
     addFrame(this, PAD, y, width - 2 * PAD, PANEL_HEIGHT - 28).setDepth(6000);
     const left = PAD + 32;
+    const buttonWidth = 240;
+    const textWidth = width - 2 * PAD - 64 - buttonWidth - 24;
     this.titleText = this.add.text(left, y + 26, '', textStyle(24, TEXT_COLORS.warm, true)).setDepth(6001);
     this.mainText = this.add.text(left, y + 56, '', textStyle(38, TEXT_COLORS.primary, true)).setDepth(6001);
     this.subText = this.add
-      .text(left, y + 110, '', { ...textStyle(24, TEXT_COLORS.secondary), wordWrap: { width: width - 2 * PAD - 64 } })
+      .text(left, y + 108, '', { ...textStyle(23, TEXT_COLORS.secondary), wordWrap: { width: textWidth } })
       .setDepth(6001);
     this.progress = new PixelBar(this, left, y + 188, width - 2 * PAD - 64, 24, COLORS.accentWarm, { segment: 8 });
     for (const obj of this.progress.objects) obj.setDepth(6001);
 
-    const buttonWidth = 260;
     const buttonX = width - PAD - 32 - buttonWidth / 2;
-    this.bayButton = addButton(this, buttonX, y + 82, buttonWidth, 88, 'Drone Bay', {
-      onClick: () => this.showDroneBay(),
+    this.bayButton = addButton(this, buttonX, y + 62, buttonWidth, 80, 'Drone Bay', {
+      onClick: () => this.showPanel('droneBay'),
       tone: 'secondary',
-      fontSize: 30,
+      fontSize: 28,
     }).setDepth(6001);
-    this.bayDot = addDot(this, buttonX + buttonWidth / 2 - 10, y + 44).setDepth(6003).setVisible(false);
+    this.bayDot = addDot(this, buttonX + buttonWidth / 2 - 10, y + 28).setDepth(6003).setVisible(false);
+    this.farmButton = addButton(this, buttonX, y + 156, buttonWidth, 80, 'Farm', {
+      onClick: () => this.showPanel('farm'),
+      tone: 'primary',
+      fontSize: 28,
+    }).setDepth(6001);
+    this.farmDot = addDot(this, buttonX + buttonWidth / 2 - 10, y + 122).setDepth(6003).setVisible(false);
   }
 
   private refreshInfo(): void {
-    const state = this.ctx.model.state;
+    const { model } = this.ctx;
+    const state = model.state;
     const farm = state.farm;
     const hasDrones = state.unlockedFeatures.includes('drones') && farm.droneCount > 0;
+    const def = FARMS_BY_ID[this.viewed];
 
     if (!hasDrones) {
       const target = MILESTONES_BY_ID['first-drone']?.condition;
@@ -334,43 +423,57 @@ export class FarmScene extends Phaser.Scene {
       this.titleText.setText('SCAVENGE BY HAND');
       this.mainText.setText('Tap the junk piles');
       this.subText.setText(`Collect materials by hand. ${left} more ${left === 1 ? 'tap' : 'taps'} and you'll have enough to build your first drone.`);
-      this.setProgress(farm.scavenged / needed);
-      this.setBayVisible(false);
-      this.startHints();
+      this.subText.setWordWrapWidth(this.cameras.main.width - 2 * PAD - 64);
+      this.subText.setColor(TEXT_COLORS.secondary);
+      this.progress.setVisible(true);
+      this.progress.set(farm.scavenged / needed);
+      this.setButtonsVisible(false);
+      if (this.viewed === 'junkyard') this.startHints();
       return;
     }
 
     this.stopHints();
-    const model = DRONE_MODELS[farm.droneModel];
-    const rates = farmRates(farm, this.ctx.model.isFull);
-    const units = MATERIAL_IDS.reduce((sum, id) => sum + rates.materials[id], 0);
-    this.titleText.setText('DRONES');
-    this.mainText.setText(`${farm.droneCount} × ${model?.name ?? 'Drone'}`);
-    // Drones leave full materials alone: say so, since it stops their money too.
-    const full = [...new Set(DEPOSITS.filter((d) => inReach(farm, d) && this.ctx.model.isFull(d.material)).map((d) => d.material))];
-    this.subText.setText(
-      full.length
-        ? `Storage full: ${full.map((id) => MATERIALS_BY_ID[id].name).join(', ')}. Spend it or build a bigger Warehouse in the Garage.`
-        : `+${formatPrecise(units * 3600)} materials/h · +${formatPrecise(rates.money * 3600)} money/h. Tap piles to help out.`,
-    );
-    this.subText.setColor(full.length ? TEXT_COLORS.warm : TEXT_COLORS.secondary);
+    this.subText.setWordWrapWidth(this.cameras.main.width - 2 * PAD - 64 - 240 - 24);
+    const crews = crewsOf(farm);
+    const here = crews[this.viewed];
+    const droneModel = DRONE_MODELS[farm.droneModel];
+    this.titleText.setText(def.name.toUpperCase());
+    this.mainText.setText(here > 0 ? `${here} × ${droneModel?.name ?? 'Drone'}` : 'No drones here');
+    if (here === 0) {
+      const where = FARM_IDS.filter((id) => crews[id] > 0).map((id) => FARMS_BY_ID[id].name);
+      this.subText.setText(`Your drones are working ${where.join(' and ')}. Tap Farm to bring them here.`);
+      this.subText.setColor(TEXT_COLORS.secondary);
+    } else {
+      const rates = farmRates(farm, model.isFull, this.viewed);
+      const units = MATERIAL_IDS.reduce((sum, id) => sum + rates.materials[id], 0);
+      // Drones leave full materials alone: say so, since it stops their money too.
+      const full = [...new Set(def.deposits.filter((d) => inReach(farm, d) && model.isFull(d.material)).map((d) => d.material))];
+      this.subText.setText(
+        full.length
+          ? `Storage full: ${full.map((id) => MATERIALS_BY_ID[id].name).join(', ')}. Spend it or build a bigger Warehouse.`
+          : `+${formatPrecise(units * 3600)} materials/h · +${formatPrecise(rates.money * 3600)} money/h here.`,
+      );
+      this.subText.setColor(full.length ? TEXT_COLORS.warm : TEXT_COLORS.secondary);
+    }
     this.progress.setVisible(false);
-    this.setBayVisible(true);
+    this.setButtonsVisible(true);
 
     const resources = state.resources;
-    const build = droneBuildCost(farm.droneCount, this.ctx.model.maxDrones());
+    const build = droneBuildCost(farm.droneCount, model.maxDrones());
     this.bayDot.setVisible(build !== null && canAfford(resources, build));
+    const local = localUpgradeCost(farm, this.viewed);
+    this.farmDot.setVisible(here === 0 || (local !== null && canAfford(resources, local)));
   }
 
-  private setProgress(ratio: number): void {
-    this.progress.setVisible(true);
-    this.progress.set(ratio);
-  }
-
-  private setBayVisible(visible: boolean): void {
-    this.bayButton.setVisible(visible);
-    if (this.bayButton.background.input) this.bayButton.background.input.enabled = visible;
-    if (!visible) this.bayDot.setVisible(false);
+  private setButtonsVisible(visible: boolean): void {
+    for (const button of [this.bayButton, this.farmButton]) {
+      button.setVisible(visible);
+      if (button.background.input) button.background.input.enabled = visible;
+    }
+    if (!visible) {
+      this.bayDot.setVisible(false);
+      this.farmDot.setVisible(false);
+    }
   }
 
   /** Before the first drone: the piles pulse gently to invite tapping. */
@@ -378,6 +481,7 @@ export class FarmScene extends Phaser.Scene {
     if (this.hintTweens.length) return;
     let delay = 0;
     for (const image of this.depositImages.values()) {
+      if (image.alpha < 1) continue;
       this.hintTweens.push(
         this.tweens.add({
           targets: image,
@@ -400,20 +504,27 @@ export class FarmScene extends Phaser.Scene {
     for (const image of this.depositImages.values()) image.setScale(DEPOSIT_SCALE);
   }
 
-  private showDroneBay(): void {
-    const animate = this.panel === null;
+  private showPanel(which: OpenPanel): void {
+    const animate = this.openPanel !== which;
     this.panel?.destroy();
+    this.openPanel = which;
     this.panelSignature = panelSignature(this.ctx.model);
     const { width, height } = this.cameras.main;
-    this.panel = openDroneBayPanel(this, this.ctx.model, { x: 0, y: 0, width, height }, () => this.closePanel(), animate, () => {
-      this.closePanel();
-      this.ctx.showTab('upgrades');
-    });
+    const area = { x: 0, y: 0, width, height };
+    const close = () => this.closePanel();
+    this.panel =
+      which === 'droneBay'
+        ? openDroneBayPanel(this, this.ctx.model, area, close, animate, () => {
+            this.closePanel();
+            this.ctx.showTab('upgrades');
+          })
+        : openFarmPanel(this, this.ctx.model, this.viewed, area, close, animate);
     this.panel.setDepth(10000);
   }
 
   private closePanel(): void {
     this.panel?.destroy();
     this.panel = null;
+    this.openPanel = null;
   }
 }

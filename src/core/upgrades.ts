@@ -10,10 +10,10 @@ import {
   type MaterialAmounts,
 } from '../data/economy';
 import { MATERIAL_IDS } from '../data/materials';
-import { DRONE_BRANCHES_BY_ID, DRONE_MODELS, DRONES, type DroneBranchId } from '../data/farm';
+import { DRONE_BRANCHES_BY_ID, DRONE_MODELS, DRONES, FARMS_BY_ID, type DroneBranchId, type FarmId } from '../data/farm';
 import type { GarageUpgradeId } from '../data/garage';
 import { partId, QUALITIES, TIER_ORDER } from '../data/vehicles';
-import { branchLevel, branchMaxLevel, type FarmState } from './farm';
+import { branchLevel, branchMaxLevel, localLevel, type FarmState } from './farm';
 import { garageUpgradeCost } from './garage';
 import type { Resources, WorkshopState } from './state';
 import { getPart, type CarState, type PartDef, type SlotId } from './vehicle';
@@ -168,5 +168,24 @@ export function buyGarageUpgrade(workshop: WorkshopState, id: GarageUpgradeId, r
   const cost = garageUpgradeCost(workshop, id);
   if (!cost || !spend(resources, cost)) return false;
   workshop[id] += 1;
+  return true;
+}
+
+/** Price of the next level of a farm's own upgrade, or null when it's maxed (or the farm has none). */
+export function localUpgradeCost(farm: FarmState, id: FarmId): Cost | null {
+  const def = FARMS_BY_ID[id].local;
+  if (!def) return null;
+  const level = localLevel(farm, id);
+  if (level >= def.maxLevel) return null;
+  const materials: MaterialAmounts = {};
+  for (const [mid, c] of Object.entries(def.cost.materials)) if (c) materials[mid as keyof MaterialAmounts] = curve(c, level + 1);
+  return { money: curve(def.cost.money, level + 1), materials };
+}
+
+/** Buys the next level of a farm's own upgrade. Returns false if not possible. */
+export function buyLocalUpgrade(farm: FarmState, id: FarmId, resources: Resources): boolean {
+  const cost = localUpgradeCost(farm, id);
+  if (!cost || !spend(resources, cost)) return false;
+  farm.local[id] = localLevel(farm, id) + 1;
   return true;
 }
